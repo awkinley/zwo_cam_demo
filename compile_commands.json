@@ -1,0 +1,22 @@
+[
+{
+  "directory": "/ssd2/gitrepos/ASI_Camera_SDK/ASI_linux_mac_SDK_V1.36/build",
+  "command": "/usr/bin/clang++-16 -D_LIN -I/ssd2/gitrepos/ASI_Camera_SDK/ASI_linux_mac_SDK_V1.36/./include -isystem /usr/include/opencv4 -O2 -g -DNDEBUG -o CMakeFiles/test_gui2_snap.dir/demo/main_SDK2_snap.cpp.o -c /ssd2/gitrepos/ASI_Camera_SDK/ASI_linux_mac_SDK_V1.36/demo/main_SDK2_snap.cpp",
+  "file": "/ssd2/gitrepos/ASI_Camera_SDK/ASI_linux_mac_SDK_V1.36/demo/main_SDK2_snap.cpp"
+},
+{
+  "directory": "/ssd2/gitrepos/ASI_Camera_SDK/ASI_linux_mac_SDK_V1.36/build",
+  "command": "/usr/bin/clang++-16 -D_LIN -I/ssd2/gitrepos/ASI_Camera_SDK/ASI_linux_mac_SDK_V1.36/./include -isystem /usr/include/opencv4 -O2 -g -DNDEBUG -o CMakeFiles/test_gui2_video.dir/demo/main_SDK2_video.cpp.o -c /ssd2/gitrepos/ASI_Camera_SDK/ASI_linux_mac_SDK_V1.36/demo/main_SDK2_video.cpp",
+  "file": "/ssd2/gitrepos/ASI_Camera_SDK/ASI_linux_mac_SDK_V1.36/demo/main_SDK2_video.cpp"
+},
+{
+  "directory": "/ssd2/gitrepos/ASI_Camera_SDK/ASI_linux_mac_SDK_V1.36/build",
+  "command": "/usr/bin/clang++-16 -D_LIN -I/ssd2/gitrepos/ASI_Camera_SDK/ASI_linux_mac_SDK_V1.36/./include -isystem /usr/include/opencv4 -O2 -g -DNDEBUG -o CMakeFiles/main_SDK2_video_mac.dir/demo/main_SDK2_video_mac.cpp.o -c /ssd2/gitrepos/ASI_Camera_SDK/ASI_linux_mac_SDK_V1.36/demo/main_SDK2_video_mac.cpp",
+  "file": "/ssd2/gitrepos/ASI_Camera_SDK/ASI_linux_mac_SDK_V1.36/demo/main_SDK2_video_mac.cpp"
+},
+{
+  "directory": "/ssd2/gitrepos/ASI_Camera_SDK/ASI_linux_mac_SDK_V1.36/build",
+  "command": "/usr/bin/clang++-16 -D_LIN -I/ssd2/gitrepos/ASI_Camera_SDK/ASI_linux_mac_SDK_V1.36/./include -I/ssd2/gitrepos/ASI_Camera_SDK/ASI_linux_mac_SDK_V1.36/deps/websocketpp -isystem /usr/include/opencv4 -O2 -g -DNDEBUG -o CMakeFiles/main_websocket.dir/demo/main_websocket.cpp.o -c /ssd2/gitrepos/ASI_Camera_SDK/ASI_linux_mac_SDK_V1.36/demo/main_websocket.cpp",
+  "file": "/ssd2/gitrepos/ASI_Camera_SDK/ASI_linux_mac_SDK_V1.36/demo/main_websocket.cpp"
+}
+]

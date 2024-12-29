@@ -66,6 +66,11 @@ target_link_libraries(test_gui2_video ${OpenCV_LIBS} ASICamera2 pthread)
 add_executable(main_SDK2_video_mac ${SOURCES_VIDEO_MAC})
 target_link_libraries(main_SDK2_video_mac ${OpenCV_LIBS} ASICamera2 pthread)
 
+add_executable(main_websocket demo/main_websocket.cpp)
+target_link_libraries(main_websocket ${OpenCV_LIBS} ASICamera2 pthread)
+target_include_directories(main_websocket PUBLIC websocketpp)
+
+
 # Output executables to bin/<platform>/
 # set_target_properties(test_gui2_snap PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin/${PLATFORM})
 # set_target_properties(test_gui2_video PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin/${PLATFORM})

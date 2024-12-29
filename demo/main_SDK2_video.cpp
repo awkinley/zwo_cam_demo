@@ -1,13 +1,74 @@
 #include <opencv2/core/types_c.h>
 #include <sys/time.h>
-#include <time.h>
+
+#include <thread>
 
 #include "ASICamera2.h"
 #include "opencv2/highgui/highgui_c.h"
-#include "pthread.h"
 #include "stdio.h"
 
 #define MAX_CONTROL 7
+
+class ASICamera {
+  ASI_CAMERA_INFO info;
+
+ public:
+  ASICamera(ASI_CAMERA_INFO info) : info{info} {};
+
+  void init() {
+    bool err = ASIOpenCamera(info.CameraID);
+    err += ASIInitCamera(info.CameraID);
+    if (err) {
+      throw std::runtime_error("Error initializing camera. Are you root?");
+    }
+  }
+
+  std::vector<ASI_CONTROL_CAPS> getControls() {
+    int ctrlnum;
+    ASIGetNumOfControls(info.CameraID, &ctrlnum);
+    std::vector<ASI_CONTROL_CAPS> controls{};
+    controls.resize(ctrlnum);
+
+    for (int i = 0; i < ctrlnum; i++) {
+      ASIGetControlCaps(info.CameraID, i, &controls.at(i));
+    }
+
+    return controls;
+  }
+
+  void printInfo() {
+    printf("%s information\n", info.Name);
+    int iMaxWidth, iMaxHeight;
+    iMaxWidth = info.MaxWidth;
+    iMaxHeight = info.MaxHeight;
+    printf("resolution:%dX%d\n", iMaxWidth, iMaxHeight);
+    const char* bayer[] = {"RG", "BG", "GR", "GB"};
+    if (info.IsColorCam)
+      printf("Color Camera: bayer pattern:%s\n", bayer[info.BayerPattern]);
+    else
+      printf("Mono camera\n");
+
+    for (const auto control : getControls()) {
+      printf("Control Name: %s\n", control.Name);
+      printf("\tdesc: %s\n", control.Description);
+      printf("\tmin value: %ld\n", control.MinValue);
+      printf("\tmax value: %ld\n", control.MaxValue);
+      printf("\tdefault value: %ld\n", control.DefaultValue);
+    }
+    // int ctrlnum;
+    // ASIGetNumOfControls(info.CameraID, &ctrlnum);
+    // ASI_CONTROL_CAPS ctrlcap;
+    // for (int i = 0; i < ctrlnum; i++) {
+    //   ASIGetControlCaps(info.CameraID, i, &ctrlcap);
+
+    //   printf("%s\n", ctrlcap.Name);
+    // }
+  }
+
+  int maxWidth() { return info.MaxWidth; }
+
+  int maxHeight() { return info.MaxHeight; }
+};
 
 void cvText(IplImage* img, const char* text, int x, int y) {
   CvFont font;
@@ -38,8 +99,8 @@ enum CHANGE {
   change_size_smaller
 };
 CHANGE change;
-void* Display(void* params) {
-  IplImage* pImg = (IplImage*)params;
+void* Display(IplImage* params) {
+  IplImage* pImg = params;
   cvNamedWindow("video", 1);
   while (bDisplay) {
     cvShowImage("video", pImg);
@@ -82,6 +143,26 @@ END:
   ASIStopVideoCapture(CamInfo.CameraID);
   return (void*)0;
 }
+
+std::vector<ASI_CAMERA_INFO> getAvailableCameras() {
+  int numDevices = ASIGetNumOfConnectedCameras();
+  if (numDevices <= 0) {
+    return {};
+  }
+
+  printf("attached cameras:\n");
+  std::vector<ASI_CAMERA_INFO> cameras{std::size_t(numDevices)};
+  cameras.resize(numDevices);
+  printf("cameras.size() = %zu\n", cameras.size());
+
+  for (int i = 0; i < numDevices; i++) {
+    ASIGetCameraProperty(&cameras.at(i), i);
+    printf("%d %s\n", i, cameras[i].Name);
+  }
+
+  return cameras;
+}
+
 int main() {
   int width;
   const char* bayer[] = {"RG", "BG", "GR", "GB"};
@@ -105,49 +186,61 @@ int main() {
 
   IplImage* pRgb;
 
-  int numDevices = ASIGetNumOfConnectedCameras();
-  if (numDevices <= 0) {
+  const auto cameras = getAvailableCameras();
+  if (cameras.empty()) {
     printf("no camera connected, press any key to exit\n");
     getchar();
     return -1;
-  } else
-    printf("attached cameras:\n");
-
-  for (i = 0; i < numDevices; i++) {
-    ASIGetCameraProperty(&CamInfo, i);
-    printf("%d %s\n", i, CamInfo.Name);
   }
+
+  // int numDevices = ASIGetNumOfConnectedCameras();
+  // if (numDevices <= 0) {
+  //   printf("no camera connected, press any key to exit\n");
+  //   getchar();
+  //   return -1;
+  // } else
+  //   printf("attached cameras:\n");
+
+  // for (i = 0; i < numDevices; i++) {
+  //   ASIGetCameraProperty(&CamInfo, i);
+  //   printf("%d %s\n", i, CamInfo.Name);
+  // }
 
   printf("\nselect one to privew\n");
   scanf("%d", &CamIndex);
 
+  // ASI_CAMERA_INFO CamInfo;
   ASIGetCameraProperty(&CamInfo, CamIndex);
-  bresult = ASIOpenCamera(CamInfo.CameraID);
-  bresult += ASIInitCamera(CamInfo.CameraID);
-  if (bresult) {
-    printf("OpenCamera error,are you root?,press any key to exit\n");
-    getchar();
-    return -1;
-  }
+  ASICamera camera{CamInfo};
 
-  printf("%s information\n", CamInfo.Name);
-  int iMaxWidth, iMaxHeight;
-  iMaxWidth = CamInfo.MaxWidth;
-  iMaxHeight = CamInfo.MaxHeight;
-  printf("resolution:%dX%d\n", iMaxWidth, iMaxHeight);
-  if (CamInfo.IsColorCam)
-    printf("Color Camera: bayer pattern:%s\n", bayer[CamInfo.BayerPattern]);
-  else
-    printf("Mono camera\n");
+  camera.init();
+  // bresult = ASIOpenCamera(CamInfo.CameraID);
+  // bresult += ASIInitCamera(CamInfo.CameraID);
+  // if (bresult) {
+  //   printf("OpenCamera error,are you root?,press any key to exit\n");
+  //   getchar();
+  //   return -1;
+  // }
 
-  int ctrlnum;
-  ASIGetNumOfControls(CamInfo.CameraID, &ctrlnum);
-  ASI_CONTROL_CAPS ctrlcap;
-  for (i = 0; i < ctrlnum; i++) {
-    ASIGetControlCaps(CamInfo.CameraID, i, &ctrlcap);
+  camera.printInfo();
+  // printf("%s information\n", CamInfo.Name);
+  // int iMaxWidth, iMaxHeight;
+  // iMaxWidth = CamInfo.MaxWidth;
+  // iMaxHeight = CamInfo.MaxHeight;
+  // printf("resolution:%dX%d\n", iMaxWidth, iMaxHeight);
+  // if (CamInfo.IsColorCam)
+  //   printf("Color Camera: bayer pattern:%s\n", bayer[CamInfo.BayerPattern]);
+  // else
+  //   printf("Mono camera\n");
 
-    printf("%s\n", ctrlcap.Name);
-  }
+  // int ctrlnum;
+  // ASIGetNumOfControls(CamInfo.CameraID, &ctrlnum);
+  // ASI_CONTROL_CAPS ctrlcap;
+  // for (i = 0; i < ctrlnum; i++) {
+  //   ASIGetControlCaps(CamInfo.CameraID, i, &ctrlcap);
+
+  //   printf("%s\n", ctrlcap.Name);
+  // }
   /*
           ASI_SUPPORTED_MODE cammode;
           ASI_CAMERA_MODE mode;
@@ -184,6 +277,9 @@ int main() {
 
           }
   */
+  int iMaxWidth = camera.maxWidth();
+  int iMaxHeight = camera.maxHeight();
+
   int bin = 1, Image_type;
   printf(
       "Use customer format or predefined fromat resolution?\n 0:customer "
@@ -322,13 +418,7 @@ int main() {
   printf("sensor temperature:%.1f\n", lVal / 10.0);
 
   bDisplay = 1;
-#ifdef _LIN
-  pthread_t thread_display;
-  pthread_create(&thread_display, NULL, Display, (void*)pRgb);
-#elif defined _WINDOWS
-  HANDLE thread_setgainexp;
-  thread_setgainexp = (HANDLE)_beginthread(Display, NULL, (void*)pRgb);
-#endif
+  std::thread thread_display{Display, pRgb};
 
   time1 = GetTickCount();
   int iStrLen = 0, iTextX = 40, iTextY = 60;
@@ -350,12 +440,12 @@ int main() {
 
     if (time2 - time1 > 1000) {
       ASIGetDroppedFrames(CamInfo.CameraID, &iDropFrmae);
-      sprintf(buf, "fps:%d dropped frames:%lu ImageType:%d", count, iDropFrmae,
+      sprintf(buf, "fps:%d dropped frames:%d ImageType:%d", count, iDropFrmae,
               (int)Image_type);
 
       count = 0;
       time1 = GetTickCount();
-      printf(buf);
+      printf("%s", buf);
       printf("\n");
     }
     if (Image_type != ASI_IMG_RGB24 && Image_type != ASI_IMG_RAW16) {
@@ -375,7 +465,7 @@ int main() {
     if (bChangeFormat) {
       bChangeFormat = 0;
       bDisplay = false;
-      pthread_join(thread_display, &retval);
+      thread_display.join();
       cvReleaseImage(&pRgb);
       ASIStopVideoCapture(CamInfo.CameraID);
 
@@ -420,7 +510,7 @@ int main() {
       else
         pRgb = cvCreateImage(cvSize(width, height), IPL_DEPTH_8U, 1);
       bDisplay = 1;
-      pthread_create(&thread_display, NULL, Display, (void*)pRgb);
+      thread_display = std::thread{Display, pRgb};
       ASIStartVideoCapture(CamInfo.CameraID);  // start privew
     }
   }
@@ -428,11 +518,7 @@ END:
 
   if (bDisplay) {
     bDisplay = 0;
-#ifdef _LIN
-    pthread_join(thread_display, &retval);
-#elif defined _WINDOWS
-    Sleep(50);
-#endif
+    thread_display.join();
   }
 
   ASIStopVideoCapture(CamInfo.CameraID);
