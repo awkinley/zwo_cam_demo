@@ -69,7 +69,7 @@ target_link_libraries(main_SDK2_video_mac ${OpenCV_LIBS} ASICamera2 pthread)
 add_subdirectory(deps)
 add_executable(main_websocket demo/main_websocket.cpp)
 target_link_libraries(main_websocket ${OpenCV_LIBS} ASICamera2 pthread uWebSockets)
-target_include_directories(main_websocket PUBLIC websocketpp)
+# target_include_directories(main_websocket PUBLIC websocketpp)
 
 
 # Output executables to bin/<platform>/

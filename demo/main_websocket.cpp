@@ -2,17 +2,15 @@
 #include <sys/time.h>
 #include <uWebSockets/App.h>
 
+#include <atomic>
 #include <opencv2/opencv.hpp>
 #include <thread>
-#include <websocketpp/base64/base64.hpp>
-#include <websocketpp/config/asio_no_tls.hpp>
-#include <websocketpp/server.hpp>
 
 #include "ASICamera2.h"
 #include "opencv2/highgui/highgui_c.h"
 #include "stdio.h"
 
-typedef websocketpp::server<websocketpp::config::asio> server;
+// typedef websocketpp::server<websocketpp::config::asio> server;
 std::mutex image_mutex;
 cv::Mat latest_image;
 std::atomic_bool hasNewImage;
@@ -149,53 +147,6 @@ enum CHANGE {
   change_size_smaller
 };
 CHANGE change;
-
-class WebSocketServer {
- public:
-  WebSocketServer() {
-    using namespace std::placeholders;
-    ws_server.set_access_channels(websocketpp::log::alevel::none);
-    ws_server.init_asio();
-    ws_server.set_message_handler(
-        std::bind(&WebSocketServer::onMessage, this, _1, _2));
-    ws_server.set_open_handler(std::bind(&WebSocketServer::onOpen, this, _1));
-    ws_server.set_close_handler(std::bind(&WebSocketServer::onClose, this, _1));
-  }
-
-  void run(uint16_t port) {
-    ws_server.listen(port);
-    ws_server.start_accept();
-    ws_server.run();
-  }
-
-  void broadcastImage() {
-    std::lock_guard<std::mutex> lock(image_mutex);
-    if (!latest_image.empty()) {
-      std::string base64_img = matToBase64(latest_image);
-      for (auto conn : connections) {
-        ws_server.send(conn, base64_img, websocketpp::frame::opcode::TEXT);
-      }
-    }
-  }
-
-  void onMessage(websocketpp::connection_hdl hdl, server::message_ptr msg) {
-    std::string payload = msg->get_payload();
-    if (payload.find("SET_GAIN") != std::string::npos) {
-      // Extract and handle gain setting update
-      std::cout << "Received gain update: " << payload << std::endl;
-    }
-  }
-
-  void onOpen(websocketpp::connection_hdl hdl) { connections.insert(hdl); }
-
-  void onClose(websocketpp::connection_hdl hdl) { connections.erase(hdl); }
-
- private:
-  server ws_server;
-  std::set<websocketpp::connection_hdl,
-           std::owner_less<websocketpp::connection_hdl>>
-      connections;
-};
 
 // Captures and updates images in a separate thread
 void captureImages(ASICamera camera) {
