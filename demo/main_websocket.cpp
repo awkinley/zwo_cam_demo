@@ -1,5 +1,6 @@
 #include <opencv2/core/types_c.h>
 #include <sys/time.h>
+#include <uWebSockets/App.h>
 
 #include <opencv2/opencv.hpp>
 #include <thread>
@@ -14,16 +15,49 @@
 typedef websocketpp::server<websocketpp::config::asio> server;
 std::mutex image_mutex;
 cv::Mat latest_image;
+std::atomic_bool hasNewImage;
 
-// Converts a cv::Mat to a base64-encoded JPEG string
+template <typename T>
+class SetValueQueue {
+  std::atomic<T> newValue;
+  std::atomic_bool hasNewValue;
+
+ public:
+  void set(T val) {
+    newValue = val;
+    hasNewValue = true;
+  }
+
+  bool didChange() { return hasNewValue; }
+
+  T get() {
+    hasNewValue = false;
+    return newValue;
+  }
+};
+
+SetValueQueue<int> gainValue;
+
 std::string matToBase64(const cv::Mat& image) {
   std::vector<uchar> buffer;
   cv::imencode(".jpg", image, buffer);
-  return websocketpp::base64_encode(buffer.data(), buffer.size());
-  // std::string base64_data =
-  //     "data:image/jpeg;base64," +
-  //     std::string(reinterpret_cast<char*>(buffer.data()), buffer.size());
-  // return base64_data;
+  static const char encodeTable[] =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  std::string base64;
+  int val = 0, valb = -6;
+  for (uchar c : buffer) {
+    val = (val << 8) + c;
+    valb += 8;
+    while (valb >= 0) {
+      base64.push_back(encodeTable[(val >> valb) & 0x3F]);
+      valb -= 6;
+    }
+  }
+  if (valb > -6)
+    base64.push_back(encodeTable[((val << 8) >> (valb + 8)) & 0x3F]);
+  while (base64.size() % 4) base64.push_back('=');
+  // return "data:image/jpeg;base64," + base64;
+  return base64;
 }
 
 #define MAX_CONTROL 7
@@ -74,35 +108,32 @@ class ASICamera {
       printf("\tmax value: %ld\n", control.MaxValue);
       printf("\tdefault value: %ld\n", control.DefaultValue);
     }
-    // int ctrlnum;
-    // ASIGetNumOfControls(info.CameraID, &ctrlnum);
-    // ASI_CONTROL_CAPS ctrlcap;
-    // for (int i = 0; i < ctrlnum; i++) {
-    //   ASIGetControlCaps(info.CameraID, i, &ctrlcap);
-
-    //   printf("%s\n", ctrlcap.Name);
-    // }
   }
 
   int maxWidth() { return info.MaxWidth; }
 
   int maxHeight() { return info.MaxHeight; }
+
+  void startVideoCapture() { ASIStartVideoCapture(info.CameraID); }
+
+  void stopVideoCapture() { ASIStopVideoCapture(info.CameraID); }
+
+  int getVideoData(unsigned char* data, long bufSize, int waitMs) {
+    return ASIGetVideoData(info.CameraID, data, bufSize, waitMs);
+  }
+
+  void setControlValue(ASI_CONTROL_TYPE ControlType, long lValue,
+                       ASI_BOOL bAuto) {
+    ASISetControlValue(info.CameraID, ControlType, lValue, bAuto);
+  }
+
+  long getControlValue(ASI_CONTROL_TYPE ControlType) {
+    long val;
+    ASI_BOOL bAuto;
+    ASIGetControlValue(info.CameraID, ControlType, &val, &bAuto);
+    return val;
+  }
 };
-
-void cvText(IplImage* img, const char* text, int x, int y) {
-  CvFont font;
-
-  double hscale = 0.6;
-  double vscale = 0.6;
-  int linewidth = 2;
-  cvInitFont(&font, CV_FONT_HERSHEY_SIMPLEX | CV_FONT_ITALIC, hscale, vscale, 0,
-             linewidth);
-
-  CvScalar textColor = cvScalar(255, 255, 255);
-  CvPoint textPos = cvPoint(x, y);
-
-  cvPutText(img, text, textPos, &font, textColor);
-}
 
 extern unsigned long GetTickCount();
 
@@ -118,50 +149,6 @@ enum CHANGE {
   change_size_smaller
 };
 CHANGE change;
-void* Display(IplImage* params) {
-  IplImage* pImg = params;
-  cvNamedWindow("video", 1);
-  while (bDisplay) {
-    cvShowImage("video", pImg);
-
-    char c = cvWaitKey(1);
-    switch (c) {
-      case 27:  // esc
-        bDisplay = false;
-        bMain = false;
-        goto END;
-
-      case 'i':  // space
-        bChangeFormat = true;
-        change = change_imagetype;
-        break;
-
-      case 'b':  // space
-        bChangeFormat = true;
-        change = change_bin;
-        break;
-
-      case 'w':  // space
-        bChangeFormat = true;
-        change = change_size_smaller;
-        break;
-
-      case 's':  // space
-        bChangeFormat = true;
-        change = change_size_bigger;
-        break;
-
-      case 't':  // triiger
-        bSendTiggerSignal = true;
-        break;
-    }
-  }
-END:
-  cvDestroyWindow("video");
-  printf("Display thread over\n");
-  ASIStopVideoCapture(CamInfo.CameraID);
-  return (void*)0;
-}
 
 class WebSocketServer {
  public:
@@ -211,41 +198,41 @@ class WebSocketServer {
 };
 
 // Captures and updates images in a separate thread
-void captureImages() {
-  // cv::VideoCapture cap(0);  // Use default camera
-  // if (!cap.isOpened()) {
-  //   std::cerr << "Failed to open camera!" << std::endl;
-  //   return;
-  // }
-
+void captureImages(ASICamera camera) {
+  // ASIStartVideoCapture(camera);  // start privew
+  camera.startVideoCapture();
   // auto pRgb = cv::CreateMat(cvSize(1920, 1080), IPL_DEPTH_8U, 3);
   cv::Mat frame{cv::Size{1920, 1080}, CV_8UC3, cv::Scalar(0, 0, 0)};
+  const auto bufSize = frame.total() * frame.elemSize();
+  std::cout << "bufSize = " << bufSize << "\n";
   // frame.create(cv::Size{1920, 1080}, CV_8UC3);
+  auto start = std::chrono::system_clock::now();
 
   while (true) {
-    ASIStartExposure(CamInfo.CameraID, ASI_FALSE);
-    usleep(50000);  // 10ms
-    auto status = ASI_EXP_WORKING;
-    while (status == ASI_EXP_WORKING) {
-      ASIGetExpStatus(CamInfo.CameraID, &status);
+    if (camera.getVideoData(frame.data, bufSize, 100) != ASI_SUCCESS) {
+      std::cout << "Failed to get video data!\n";
+      continue;
     }
 
-    const auto bufSize = frame.total() * frame.elemSize();
-    std::cout << "bufSize = " << bufSize << "\n";
+    if (gainValue.didChange()) {
+      camera.setControlValue(ASI_GAIN, gainValue.get(), ASI_FALSE);
+    }
 
-    ASIGetDataAfterExp(CamInfo.CameraID, frame.data,
-                       frame.total() * frame.elemSize());
-
-    // cv::imwrite("./img.png", frame);
-    // cv::Mat frame;
-    // cap >> frame;
-    // if (frame.empty()) continue;
-
-    std::lock_guard<std::mutex> lock(image_mutex);
-    latest_image = frame;
-    std::this_thread::sleep_for(
-        std::chrono::seconds(1));  // Simulate periodic update
+    auto now = std::chrono::system_clock::now();
+    const auto msSinceLast =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - start)
+            .count();
+    if (msSinceLast > 1000) {
+      {
+        std::lock_guard<std::mutex> lock(image_mutex);
+        latest_image = frame;
+      }
+      hasNewImage.store(true);
+      start = now;
+    }
   }
+
+  camera.stopVideoCapture();
 }
 
 std::vector<ASI_CAMERA_INFO> getAvailableCameras() {
@@ -266,6 +253,7 @@ std::vector<ASI_CAMERA_INFO> getAvailableCameras() {
 
   return cameras;
 }
+uWS::App* globalApp;
 
 int main() {
   int width;
@@ -297,19 +285,6 @@ int main() {
     return -1;
   }
 
-  // int numDevices = ASIGetNumOfConnectedCameras();
-  // if (numDevices <= 0) {
-  //   printf("no camera connected, press any key to exit\n");
-  //   getchar();
-  //   return -1;
-  // } else
-  //   printf("attached cameras:\n");
-
-  // for (i = 0; i < numDevices; i++) {
-  //   ASIGetCameraProperty(&CamInfo, i);
-  //   printf("%d %s\n", i, CamInfo.Name);
-  // }
-
   CamIndex = 0;
   if (cameras.size() > 1) {
     printf("\nselect one to privew\n");
@@ -321,153 +296,11 @@ int main() {
   ASICamera camera{CamInfo};
 
   camera.init();
-  // bresult = ASIOpenCamera(CamInfo.CameraID);
-  // bresult += ASIInitCamera(CamInfo.CameraID);
-  // if (bresult) {
-  //   printf("OpenCamera error,are you root?,press any key to exit\n");
-  //   getchar();
-  //   return -1;
-  // }
 
   camera.printInfo();
-  // printf("%s information\n", CamInfo.Name);
-  // int iMaxWidth, iMaxHeight;
-  // iMaxWidth = CamInfo.MaxWidth;
-  // iMaxHeight = CamInfo.MaxHeight;
-  // printf("resolution:%dX%d\n", iMaxWidth, iMaxHeight);
-  // if (CamInfo.IsColorCam)
-  //   printf("Color Camera: bayer pattern:%s\n", bayer[CamInfo.BayerPattern]);
-  // else
-  //   printf("Mono camera\n");
 
-  // int ctrlnum;
-  // ASIGetNumOfControls(CamInfo.CameraID, &ctrlnum);
-  // ASI_CONTROL_CAPS ctrlcap;
-  // for (i = 0; i < ctrlnum; i++) {
-  //   ASIGetControlCaps(CamInfo.CameraID, i, &ctrlcap);
-
-  //   printf("%s\n", ctrlcap.Name);
-  // }
-  /*
-          ASI_SUPPORTED_MODE cammode;
-          ASI_CAMERA_MODE mode;
-          if(CamInfo.IsTriggerCam)
-          {
-                  i = 0;
-                  printf("This is multi mode camera, you need to select the
-     camera mode:\n"); ASIGetCameraSupportMode(CamInfo.CameraID, &cammode);
-                  while(cammode.SupportedCameraMode[i]!= ASI_MODE_END)
-                  {
-                          if(cammode.SupportedCameraMode[i]==ASI_MODE_NORMAL)
-                                  printf("%d:Normal Mode\n", i);
-                          if(cammode.SupportedCameraMode[i]==ASI_MODE_TRIG_SOFT_EDGE)
-                                  printf("%d:Trigger Soft Edge Mode\n", i);
-                          if(cammode.SupportedCameraMode[i]==ASI_MODE_TRIG_RISE_EDGE)
-                                  printf("%d:Trigger Rise Edge Mode\n", i);
-                          if(cammode.SupportedCameraMode[i]==ASI_MODE_TRIG_FALL_EDGE)
-                                  printf("%d:Trigger Fall Edge Mode\n", i);
-                          if(cammode.SupportedCameraMode[i]==ASI_MODE_TRIG_SOFT_LEVEL)
-                                  printf("%d:Trigger Soft Level Mode\n", i);
-                          if(cammode.SupportedCameraMode[i]==ASI_MODE_TRIG_HIGH_LEVEL)
-                                  printf("%d:Trigger High Level Mode\n", i);
-                          if(cammode.SupportedCameraMode[i]==ASI_MODE_TRIG_LOW_LEVEL)
-                                  printf("%d:Trigger Low  Lovel Mode\n", i);
-
-                          i++;
-                  }
-
-                  scanf("%d", &modeIndex);
-                  ASISetCameraMode(CamInfo.CameraID,
-     cammode.SupportedCameraMode[modeIndex]); ASIGetCameraMode(CamInfo.CameraID,
-     &mode); if(mode != cammode.SupportedCameraMode[modeIndex]) printf("Set mode
-     failed!\n");
-
-          }
-  */
   int iMaxWidth = camera.maxWidth();
   int iMaxHeight = camera.maxHeight();
-
-  // int bin = 1, Image_type;
-  // printf(
-  //     "Use customer format or predefined fromat resolution?\n 0:customer "
-  //     "format \n 1:predefined format\n");
-  // scanf("%d", &inputformat);
-  // if (inputformat) {
-  //   printf("0:Size %d X %d, BIN 1, ImgType raw8\n", iMaxWidth, iMaxHeight);
-  //   printf("1:Size %d X %d, BIN 1, ImgType raw16\n", iMaxWidth, iMaxHeight);
-  //   printf("2:Size 1920 X 1080, BIN 1, ImgType raw8\n");
-  //   printf("3:Size 1920 X 1080, BIN 1, ImgType raw16\n");
-  //   printf("4:Size 320 X 240, BIN 2, ImgType raw8\n");
-  //   scanf("%d", &definedformat);
-  //   if (definedformat == 0) {
-  //     ASISetROIFormat(CamInfo.CameraID, iMaxWidth, iMaxHeight, 1,
-  //     ASI_IMG_RAW8); width = iMaxWidth; height = iMaxHeight; bin = 1;
-  //     Image_type = ASI_IMG_RAW8;
-  //   } else if (definedformat == 1) {
-  //     ASISetROIFormat(CamInfo.CameraID, iMaxWidth, iMaxHeight, 1,
-  //                     ASI_IMG_RAW16);
-  //     width = iMaxWidth;
-  //     height = iMaxHeight;
-  //     bin = 1;
-  //     Image_type = ASI_IMG_RAW16;
-  //   } else if (definedformat == 2) {
-  //     ASISetROIFormat(CamInfo.CameraID, 1920, 1080, 1, ASI_IMG_RAW8);
-  //     width = 1920;
-  //     height = 1080;
-  //     bin = 1;
-  //     Image_type = ASI_IMG_RAW8;
-  //   } else if (definedformat == 3) {
-  //     ASISetROIFormat(CamInfo.CameraID, 1920, 1080, 1, ASI_IMG_RAW16);
-  //     width = 1920;
-  //     height = 1080;
-  //     bin = 1;
-  //     Image_type = ASI_IMG_RAW16;
-  //   } else if (definedformat == 4) {
-  //     ASISetROIFormat(CamInfo.CameraID, 320, 240, 2, ASI_IMG_RAW8);
-  //     width = 320;
-  //     height = 240;
-  //     bin = 2;
-  //     Image_type = ASI_IMG_RAW8;
-
-  //   } else {
-  //     printf("Wrong input! Will use the resolution0 as default.\n");
-  //     ASISetROIFormat(CamInfo.CameraID, iMaxWidth, iMaxHeight, 1,
-  //     ASI_IMG_RAW8); width = iMaxWidth; height = iMaxHeight; bin = 1;
-  //     Image_type = ASI_IMG_RAW8;
-  //   }
-
-  // } else {
-  //   printf(
-  //       "\nPlease input the <width height bin image_type> with one space, ie.
-  //       " "640 480 2 0. use max resolution if input is 0. Press ESC when
-  //       video " "window is focused to quit capture\n");
-  //   scanf("%d %d %d %d", &width, &height, &bin, &Image_type);
-  //   if (width == 0 || height == 0) {
-  //     width = iMaxWidth;
-  //     height = iMaxHeight;
-  //   }
-
-  //   while (ASISetROIFormat(CamInfo.CameraID, width, height, bin,
-  //                          (ASI_IMG_TYPE)Image_type))  // IMG_RAW8
-  //   {
-  //     printf(
-  //         "Set format error, please check the width and height\n ASI120's
-  //         data " "size(width*height) must be integer multiple of 1024\n");
-  //     printf("Please input the width and height again, ie. 640 480\n");
-  //     scanf("%d %d %d %d", &width, &height, &bin, &Image_type);
-  //   }
-  //   printf(
-  //       "\nset image format %d %d %d %d success, start privew, press ESC to "
-  //       "stop \n",
-  //       width, height, bin, Image_type);
-  // }
-
-  // if (Image_type == ASI_IMG_RAW16)
-  //   pRgb = cvCreateImage(cvSize(width, height), IPL_DEPTH_16U, 1);
-  // else if (Image_type == ASI_IMG_RGB24)
-  //   pRgb = cvCreateImage(cvSize(width, height), IPL_DEPTH_8U, 3);
-  // else
-  //   pRgb = cvCreateImage(cvSize(width, height), IPL_DEPTH_8U, 1);
 
   ASISetROIFormat(CamInfo.CameraID, iMaxWidth, iMaxHeight, 1, ASI_IMG_RGB24);
 
@@ -476,177 +309,94 @@ int main() {
   // scanf("%d", &exp_ms);
   ASISetControlValue(CamInfo.CameraID, ASI_EXPOSURE, exp_ms * 1000, ASI_FALSE);
   // ASISetControlValue(CamInfo.CameraID,ASI_GAIN,0, ASI_FALSE);
-  ASISetControlValue(CamInfo.CameraID, ASI_GAIN, 255, ASI_TRUE);
+  ASISetControlValue(CamInfo.CameraID, ASI_GAIN, 400, ASI_TRUE);
   ASISetControlValue(CamInfo.CameraID, ASI_BANDWIDTHOVERLOAD, 40,
                      ASI_FALSE);  // low transfer speed
   ASISetControlValue(CamInfo.CameraID, ASI_HIGH_SPEED_MODE, 0, ASI_FALSE);
   ASISetControlValue(CamInfo.CameraID, ASI_WB_B, 90, ASI_FALSE);
   ASISetControlValue(CamInfo.CameraID, ASI_WB_R, 48, ASI_TRUE);
 
-  WebSocketServer ws_server;
-  std::thread ws_thread([&]() { ws_server.run(9002); });
+  // std::vector<uWS::WebSocket<false, true>*> clients;
 
-  std::thread capture_thread(captureImages);
+  std::thread capture_thread(captureImages, camera);
+  struct PerSocketData {
+    /* Fill with user data */
+  };
 
-  while (true) {
-    ws_server.broadcastImage();
-    std::this_thread::sleep_for(std::chrono::seconds(2));
-  }
+  uWS::App app =
+      uWS::App()
+          .ws<PerSocketData>(
+              "/*",
+              {.open =
+                   [](auto* ws) {
+                     ws->subscribe("images");
+                     //  clients.push_back(ws);
+                     std::cout << "Client connected." << std::endl;
+                   },
+               .message =
+                   [](auto* ws, std::string_view message, uWS::OpCode opCode) {
+                     std::string msg(message);
+                     if (msg.find("SET_GAIN") != std::string::npos) {
+                       std::cout << "Received gain update: " << msg
+                                 << std::endl;
+                       std::string floatPart{
+                           msg.begin() + std::string("SET_GAIN:").size(),
+                           msg.end()};
+                       gainValue.set(std::stol(floatPart));
+                     }
+                   },
+               .close =
+                   [](auto* ws, int, std::string_view) {
+                     std::cout << "Client disconnected." << std::endl;
+                   }})
+          .listen(9002, [](auto* token) {
+            if (token) {
+              std::cout << "Server started on port 9002" << std::endl;
+            } else {
+              std::cerr << "Failed to start server!" << std::endl;
+            }
+          });
 
-  ws_thread.join();
+  struct us_loop_t* loop = (struct us_loop_t*)uWS::Loop::get();
+  struct us_timer_t* delayTimer = us_create_timer(loop, 0, 0);
+
+  // broadcast the unix time as millis every 8 millis
+  us_timer_set(
+      delayTimer,
+      [](struct us_timer_t* /*t*/) {
+        struct timespec ts;
+        timespec_get(&ts, TIME_UTC);
+
+        int64_t millis = ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+
+        if (!hasNewImage) {
+          return;
+        }
+        // std::cout << "Broadcasting timestamp: " << millis << std::endl;
+        std::string base64_img;
+        {
+          std::lock_guard<std::mutex> lock(image_mutex);
+          if (!latest_image.empty()) {
+            base64_img = matToBase64(latest_image);
+          }
+          hasNewImage = false;
+        }
+        globalApp->publish("images", base64_img, uWS::OpCode::TEXT);
+
+        // app->publish("broadcast", std::string_view((char *) &millis,
+        // sizeof(millis)), uWS::OpCode::BINARY, false);
+      },
+      8, 10);
+
+  globalApp = &app;
+
+  app.run();
+
   capture_thread.join();
-
-  //   ASI_SUPPORTED_MODE cammode;
-  //   ASI_CAMERA_MODE mode;
-  //   if (CamInfo.IsTriggerCam) {
-  //     i = 0;
-  //     printf("This is multi mode camera, you need to select the camera
-  //     mode:\n"); ASIGetCameraSupportMode(CamInfo.CameraID, &cammode); while
-  //     (cammode.SupportedCameraMode[i] != ASI_MODE_END) {
-  //       if (cammode.SupportedCameraMode[i] == ASI_MODE_NORMAL)
-  //         printf("%d:Normal Mode\n", i);
-  //       if (cammode.SupportedCameraMode[i] == ASI_MODE_TRIG_SOFT_EDGE)
-  //         printf("%d:Trigger Soft Edge Mode\n", i);
-  //       if (cammode.SupportedCameraMode[i] == ASI_MODE_TRIG_RISE_EDGE)
-  //         printf("%d:Trigger Rise Edge Mode\n", i);
-  //       if (cammode.SupportedCameraMode[i] == ASI_MODE_TRIG_FALL_EDGE)
-  //         printf("%d:Trigger Fall Edge Mode\n", i);
-  //       if (cammode.SupportedCameraMode[i] == ASI_MODE_TRIG_SOFT_LEVEL)
-  //         printf("%d:Trigger Soft Level Mode\n", i);
-  //       if (cammode.SupportedCameraMode[i] == ASI_MODE_TRIG_HIGH_LEVEL)
-  //         printf("%d:Trigger High Level Mode\n", i);
-  //       if (cammode.SupportedCameraMode[i] == ASI_MODE_TRIG_LOW_LEVEL)
-  //         printf("%d:Trigger Low  Lovel Mode\n", i);
-
-  //       i++;
-  //     }
-
-  //     scanf("%d", &modeIndex);
-  //     ASISetCameraMode(CamInfo.CameraID,
-  //     cammode.SupportedCameraMode[modeIndex]);
-  //     ASIGetCameraMode(CamInfo.CameraID, &mode);
-  //     if (mode != cammode.SupportedCameraMode[modeIndex])
-  //       printf("Set mode failed!\n");
-  //   }
-
-  //   ASIStartVideoCapture(CamInfo.CameraID);  // start privew
-
-  //   long lVal;
-  //   ASI_BOOL bAuto;
-  //   ASIGetControlValue(CamInfo.CameraID, ASI_TEMPERATURE, &lVal, &bAuto);
-  //   printf("sensor temperature:%.1f\n", lVal / 10.0);
-
-  //   bDisplay = 1;
-  //   std::thread thread_display{Display, pRgb};
-
-  //   time1 = GetTickCount();
-  //   int iStrLen = 0, iTextX = 40, iTextY = 60;
-  //   void* retval;
-
-  //   int iDropFrmae;
-  //   while (bMain) {
-  //     if (mode == ASI_MODE_NORMAL) {
-  //       if (ASIGetVideoData(CamInfo.CameraID, (unsigned
-  //       char*)pRgb->imageData,
-  //                           pRgb->imageSize, 500) == ASI_SUCCESS)
-  //         count++;
-  //     } else {
-  //       if (ASIGetVideoData(CamInfo.CameraID, (unsigned
-  //       char*)pRgb->imageData,
-  //                           pRgb->imageSize, 1000) == ASI_SUCCESS)
-  //         count++;
-  //     }
-
-  //     time2 = GetTickCount();
-
-  //     if (time2 - time1 > 1000) {
-  //       ASIGetDroppedFrames(CamInfo.CameraID, &iDropFrmae);
-  //       sprintf(buf, "fps:%d dropped frames:%d ImageType:%d", count,
-  //       iDropFrmae,
-  //               (int)Image_type);
-
-  //       count = 0;
-  //       time1 = GetTickCount();
-  //       printf("%s", buf);
-  //       printf("\n");
-  //     }
-  //     if (Image_type != ASI_IMG_RGB24 && Image_type != ASI_IMG_RAW16) {
-  //       iStrLen = strlen(buf);
-  //       CvRect rect = cvRect(iTextX, iTextY - 15, iStrLen * 11, 20);
-  //       cvSetImageROI(pRgb, rect);
-  //       cvSet(pRgb, cvScalar(180, 180, 180));
-  //       cvResetImageROI(pRgb);
-  //     }
-  //     cvText(pRgb, buf, iTextX, iTextY);
-
-  //     if (bSendTiggerSignal) {
-  //       ASISendSoftTrigger(CamInfo.CameraID, ASI_TRUE);
-  //       bSendTiggerSignal = 0;
-  //     }
-
-  //     if (bChangeFormat) {
-  //       bChangeFormat = 0;
-  //       bDisplay = false;
-  //       thread_display.join();
-  //       cvReleaseImage(&pRgb);
-  //       ASIStopVideoCapture(CamInfo.CameraID);
-
-  //       switch (change) {
-  //         case change_imagetype:
-  //           Image_type++;
-  //           if (Image_type > 3) Image_type = 0;
-
-  //           break;
-  //         case change_bin:
-  //           if (bin == 1) {
-  //             bin = 2;
-  //             width /= 2;
-  //             height /= 2;
-  //           } else {
-  //             bin = 1;
-  //             width *= 2;
-  //             height *= 2;
-  //           }
-  //           break;
-  //         case change_size_smaller:
-  //           if (width > 320 && height > 240) {
-  //             width /= 2;
-  //             height /= 2;
-  //           }
-  //           break;
-
-  //         case change_size_bigger:
-
-  //           if (width * 2 * bin <= iMaxWidth && height * 2 * bin <=
-  //           iMaxHeight) {
-  //             width *= 2;
-  //             height *= 2;
-  //           }
-  //           break;
-  //       }
-  //       ASISetROIFormat(CamInfo.CameraID, width, height, bin,
-  //                       (ASI_IMG_TYPE)Image_type);
-  //       if (Image_type == ASI_IMG_RAW16)
-  //         pRgb = cvCreateImage(cvSize(width, height), IPL_DEPTH_16U, 1);
-  //       else if (Image_type == ASI_IMG_RGB24)
-  //         pRgb = cvCreateImage(cvSize(width, height), IPL_DEPTH_8U, 3);
-  //       else
-  //         pRgb = cvCreateImage(cvSize(width, height), IPL_DEPTH_8U, 1);
-  //       bDisplay = 1;
-  //       thread_display = std::thread{Display, pRgb};
-  //       ASIStartVideoCapture(CamInfo.CameraID);  // start privew
-  //     }
-  //   }
-  // END:
-
-  //   if (bDisplay) {
-  //     bDisplay = 0;
-  //     thread_display.join();
-  //   }
 
   ASIStopVideoCapture(CamInfo.CameraID);
   ASICloseCamera(CamInfo.CameraID);
   cvReleaseImage(&pRgb);
   printf("main function over\n");
-  return 1;
+  return 0;
 }

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.10)
 
 # Project name
-project(MyProject LANGUAGES CXX)
+project(MyProject LANGUAGES C CXX)
 
 # Set default build type to Debug
 if(NOT CMAKE_BUILD_TYPE)
@@ -66,8 +66,9 @@ target_link_libraries(test_gui2_video ${OpenCV_LIBS} ASICamera2 pthread)
 add_executable(main_SDK2_video_mac ${SOURCES_VIDEO_MAC})
 target_link_libraries(main_SDK2_video_mac ${OpenCV_LIBS} ASICamera2 pthread)
 
+add_subdirectory(deps)
 add_executable(main_websocket demo/main_websocket.cpp)
-target_link_libraries(main_websocket ${OpenCV_LIBS} ASICamera2 pthread)
+target_link_libraries(main_websocket ${OpenCV_LIBS} ASICamera2 pthread uWebSockets)
 target_include_directories(main_websocket PUBLIC websocketpp)
 
 
