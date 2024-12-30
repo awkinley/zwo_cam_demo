@@ -10,11 +10,11 @@
 #include "opencv2/highgui/highgui_c.h"
 #include "stdio.h"
 
-
 // typedef websocketpp::server<websocketpp::config::asio> server;
 std::mutex image_mutex;
 cv::Mat latest_image;
 std::atomic_bool hasNewImage;
+std::atomic_uint32_t numCaptures;
 
 template <typename T>
 class SetValueQueue {
@@ -36,6 +36,9 @@ class SetValueQueue {
 };
 
 SetValueQueue<int> gainValue;
+SetValueQueue<int> exposureValue;
+SetValueQueue<bool> startCapture;
+std::atomic_bool stopCapture;
 
 std::string matToBase64(const cv::Mat& image) {
   std::vector<uchar> buffer;
@@ -149,6 +152,26 @@ enum CHANGE {
 };
 CHANGE change;
 
+void captureLoop(ASICamera& camera, std::atomic_bool* doStop) {
+  cv::Mat frame{cv::Size{1920, 1080}, CV_8UC3, cv::Scalar(0, 0, 0)};
+  const auto bufSize = frame.total() * frame.elemSize();
+
+  numCaptures = 0;
+  while (numCaptures < 10) {
+    if (camera.getVideoData(frame.data, bufSize, 100) != ASI_SUCCESS) {
+      std::cout << "Failed to get video data!\n";
+      continue;
+    }
+
+    const auto timestamp = std::chrono::system_clock::now();
+    time_t epoch_seconds = std::chrono::system_clock::to_time_t(timestamp);
+    std::stringstream ss;
+    ss << "imgs/" << epoch_seconds << ".tiff";
+    cv::imwrite(ss.str(), frame);
+    numCaptures++;
+  }
+}
+
 // Captures and updates images in a separate thread
 void captureImages(ASICamera camera) {
   // ASIStartVideoCapture(camera);  // start privew
@@ -168,6 +191,14 @@ void captureImages(ASICamera camera) {
 
     if (gainValue.didChange()) {
       camera.setControlValue(ASI_GAIN, gainValue.get(), ASI_FALSE);
+    }
+    if (exposureValue.didChange()) {
+      camera.setControlValue(ASI_EXPOSURE, long(exposureValue.get() * 1000),
+                             ASI_FALSE);
+    }
+
+    if (startCapture.get()) {
+      captureLoop(camera, &stopCapture);
     }
 
     auto now = std::chrono::system_clock::now();
@@ -291,10 +322,25 @@ int main() {
                      if (msg.find("SET_GAIN") != std::string::npos) {
                        std::cout << "Received gain update: " << msg
                                  << std::endl;
-                       std::string floatPart{
+                       std::string numPart{
                            msg.begin() + std::string("SET_GAIN:").size(),
                            msg.end()};
-                       gainValue.set(std::stol(floatPart));
+                       gainValue.set(std::stol(numPart));
+                     } else if (msg.find("SET_EXPOSURE") != std::string::npos) {
+                       std::cout << "Received exposure update: " << msg
+                                 << std::endl;
+                       std::string numPart{
+                           msg.begin() + std::string("SET_EXPOSURE:").size(),
+                           msg.end()};
+                       exposureValue.set(std::stol(numPart));
+                     } else if (msg.find("START_CAPTURE") !=
+                                std::string::npos) {
+                       std::cout << "Received start capture: " << msg
+                                 << std::endl;
+                       startCapture.set(true);
+
+                     } else {
+                       std::cout << "Unrecognized msg: " << msg << std::endl;
                      }
                    },
                .close =

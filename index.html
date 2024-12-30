@@ -11,6 +11,11 @@
     <h2>Update Gain</h2>
     <input type="number" id="gainInput" placeholder="Set gain value">
     <button onclick="updateGain()">Send Gain</button>
+    <br>
+    <input type="number" id="exposureInput" placeholder="Set exposure duration (ms)">
+    <button onclick="updateExposure()">Send Exposure</button>
+    <br>
+    <button onclick="startCapture()">Start Capture</button>
 
     <script>
         // const ws = new WebSocket("ws://192.168.40.153:9002");
@@ -29,55 +34,19 @@
             }
         }
 
+        function updateExposure() {
+            const value = document.getElementById("exposureInput").value;
+            if (value) {
+                ws.send(`SET_EXPOSURE:${value}`);
+            }
+        }
+
+        function startCapture() {
+            ws.send(`START_CAPTURE`);
+        }
+
         ws.onopen = () => console.log("Connected to WebSocket server.");
         ws.onclose = () => console.log("Disconnected from WebSocket server.");
     </script>
 </body>
 </html>
-
-<!-- <!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebSocket Image Stream</title>
-</head>
-<body>
-    <h1>Image Stream</h1>
-    <img id="image" alt="Streaming Image" style="width: 640px; height: 480px;">
-
-    <h2>Settings</h2>
-    <input id="gain" type="number" placeholder="Gain" step="0.1">
-    <button id="send">Update Gain</button>
-
-    <script>
-        const ws = new WebSocket('ws://localhost:9002');
-        const imageElement = document.getElementById('image');
-
-        ws.onopen = () => {
-            console.log('Connected to WebSocket server');
-        };
-
-        ws.onmessage = (event) => {
-            if (typeof event.data === 'string') {
-                console.log('Message received:', event.data);
-            } else {
-                const blob = new Blob([event.data], { type: 'image/jpeg' });
-                const url = URL.createObjectURL(blob);
-                imageElement.src = url;
-            }
-        };
-
-        ws.onclose = () => {
-            console.log('WebSocket connection closed');
-        };
-
-        document.getElementById('send').onclick = () => {
-            const gain = document.getElementById('gain').value;
-            if (gain) {
-                ws.send(JSON.stringify({ gain: parseFloat(gain) }));
-            }
-        };
-    </script>
-</body>
-</html> -->
