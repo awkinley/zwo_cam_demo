@@ -141,7 +141,7 @@ impl<'a> OpenCamera<'a> {
     }
 }
 
-impl<'a> Drop for OpenCamera<'a> {
+impl Drop for OpenCamera<'_> {
     fn drop(&mut self) {
         println!("Closing Camera {}", self.camera.get_name());
         unsafe {

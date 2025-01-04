@@ -4,7 +4,7 @@ use opencv::{
     core::{Mat, MatTraitManual, Scalar, CV_8UC3},
     imgcodecs,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_repr::Serialize_repr;
 
 use anyhow::Result;
@@ -43,7 +43,7 @@ fn make_hist_plot(hist: &ChannelHistogram) -> RgbImage {
         let max_value = hist
             .channels
             .iter()
-            .filter_map(|v| (v.iter().max().map(|&v| v)))
+            .filter_map(|v| (v.iter().max().copied()))
             .max()
             .unwrap_or(1);
 
@@ -59,7 +59,7 @@ fn make_hist_plot(hist: &ChannelHistogram) -> RgbImage {
                 channel
                     .iter()
                     .enumerate()
-                    .map(|(idx, v)| (idx as i32, *v as u32))
+                    .map(|(idx, v)| (idx as i32, *v))
                     .collect::<Vec<_>>(),
                 color,
             ))
@@ -120,22 +120,6 @@ pub struct CameraController<'a> {
     tx: Sender<ClientPacket>,
     rx: Receiver<ControlMessages>,
     state: CamState,
-}
-
-fn get_camera_info() -> impl Iterator<Item = Camera> {
-    unsafe {
-        // let num_connected = asi::ASIGetNumOfConnectedCameras();
-        let num_connected = std::dbg!(asi::get_num_of_connected_cameras());
-
-        (0..num_connected).filter_map(|i| {
-            let mut info = asi::ASI_CAMERA_INFO::new();
-
-            let idx: std::os::raw::c_int = i as std::os::raw::c_int;
-            asi::get_camera_property(&mut info, idx)
-                .map(|_| Camera::new(info))
-                .ok()
-        })
-    }
 }
 
 impl<'a> CameraController<'a> {
@@ -265,11 +249,9 @@ impl<'a> CameraController<'a> {
         self.ccd
             .get_video_data(img.as_flat_samples_mut().samples, 500)?;
 
-        let mut hist_result = imageproc::stats::histogram(&img);
+        let mut hist_result = imageproc::stats::histogram(img);
         // handle bgr -> rgb conversion
-        let tmp = hist_result.channels[0];
-        hist_result.channels[0] = hist_result.channels[2];
-        hist_result.channels[2] = tmp;
+        hist_result.channels.swap(0, 2);
 
         let hist_img = make_hist_plot(&hist_result);
         // hist_img.write_to(&mut Cursor::new(&mut png_bytes), image::ImageFormat::Jpeg)?;

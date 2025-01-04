@@ -1,30 +1,17 @@
-use std::time;
-
 use anyhow::Result;
-use image::RgbImage;
-
-use opencv::{
-    core::{Scalar, Vec3b, CV_8U, CV_8UC3},
-    highgui, imgcodecs,
-    prelude::*,
-};
 
 use tokio::sync::broadcast;
 use zwo_asi_rs::{
     asi::{self},
-    camera_controller::{CameraController, ClientPacket, ControlMessages, ImagePacket},
+    camera_controller::{CameraController, ClientPacket, ControlMessages},
     Camera,
 };
 
 use axum::{
-    body::Bytes,
-    extract::{
-        ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade},
-        State,
-    },
+    extract::{ws::WebSocketUpgrade, State},
     http::{HeaderValue, Method},
     response::IntoResponse,
-    routing::{any, get_service},
+    routing::any,
     Router,
 };
 use axum_extra::{headers, TypedHeader};
@@ -52,148 +39,17 @@ fn get_camera_info() -> impl Iterator<Item = Camera> {
 
             let idx: std::os::raw::c_int = i as std::os::raw::c_int;
             asi::get_camera_property(&mut info, idx)
-                .map(|_| Camera::new(info))
+                .map(|()| Camera::new(info))
                 .ok()
         })
     }
 }
-
-fn test_save_tiff_perf() -> Result<()> {
-    let camera = get_camera_info()
-        .next()
-        .ok_or(anyhow::anyhow!("No camera available."))?;
-
-    println!("Camera: {}", camera.get_name());
-
-    let ccd = camera.open()?;
-    ccd.init()?;
-
-    ccd.set_roi_format(1920, 1080, 1, asi::IMG_TYPE::RGB24)?;
-
-    ccd.set_control_value(asi::CONTROL_TYPE::EXPOSURE, 100 * 1000, false)?;
-    ccd.set_control_value(asi::CONTROL_TYPE::GAIN, 100, false)?;
-    ccd.set_control_value(asi::CONTROL_TYPE::BANDWIDTHOVERLOAD, 50, false)?;
-
-    for _ in 0..10 {
-        let mut img = RgbImage::new(1920, 1080);
-        ccd.take_exposure(img.as_flat_samples_mut().samples)?;
-
-        let typ = CV_8UC3;
-        let mut frame = Mat::new_rows_cols_with_default(1080, 1920, typ, Scalar::all(0.)).unwrap();
-        ccd.take_exposure(frame.data_bytes_mut()?)?;
-
-        let start = time::Instant::now();
-        img.save_with_format("./image.tiff", image::ImageFormat::Tiff)?;
-        let end = time::Instant::now();
-        let duration = end - start;
-        println!("Saving tiff using image took {:?}", duration);
-
-        let start = time::Instant::now();
-        let mut params = opencv::core::Vector::<i32>::new();
-        params.push(opencv::imgcodecs::IMWRITE_TIFF_COMPRESSION);
-        params.push(1);
-        // imgcodecs::imencode("tiff", &frame, buf, params)
-        imgcodecs::imwrite("frame.tiff", &frame, &params)?;
-        // opencv::
-        let end = time::Instant::now();
-        let duration = end - start;
-        println!("Saving tiff using opencv took {:?}", duration);
-    }
-    Ok(())
-}
-
-// #[derive(Copy, Clone, Debug, PartialEq)]
-// enum ControlMessages {
-//     SetGain(i32),
-//     SetExposure(f32),
-//     SetWbR(i32),
-//     SetWbB(i32),
-//     SwitchOutput,
-// }
 
 #[derive(Clone)]
 struct WebSocketState {
     tx: broadcast::Sender<ControlMessages>,
     rx: broadcast::Sender<ClientPacket>,
 }
-
-// fn make_hist_plot(hist: &ChannelHistogram) -> RgbImage {
-//     let mut img = RgbImage::new(1920, 1080);
-//     {
-//         let drawing_area =
-//             BitMapBackend::with_buffer(img.as_flat_samples_mut().samples, (1920, 1080))
-//                 .into_drawing_area();
-
-//         drawing_area.fill(&WHITE).unwrap();
-//         let max_value = hist
-//             .channels
-//             .iter()
-//             .filter_map(|v| v.iter().max())
-//             .max()
-//             .unwrap_or(&1);
-
-//         let mut ctx = ChartBuilder::on(&drawing_area)
-//             .set_label_area_size(LabelAreaPosition::Left, 40)
-//             .set_label_area_size(LabelAreaPosition::Bottom, 40)
-//             .build_cartesian_2d(0..255, 0..*max_value)
-//             .unwrap();
-//         ctx.configure_mesh().draw().unwrap();
-
-//         ctx.draw_series(LineSeries::new(
-//             hist.channels[0]
-//                 .iter()
-//                 .enumerate()
-//                 .map(|(idx, v)| (idx as i32, *v as u32))
-//                 .collect::<Vec<_>>(),
-//             &RED,
-//         ))
-//         .unwrap();
-//         ctx.draw_series(LineSeries::new(
-//             hist.channels[1]
-//                 .iter()
-//                 .enumerate()
-//                 .map(|(idx, v)| (idx as i32, *v as u32))
-//                 .collect::<Vec<_>>(),
-//             &GREEN,
-//         ))
-//         .unwrap();
-//         ctx.draw_series(LineSeries::new(
-//             hist.channels[2]
-//                 .iter()
-//                 .enumerate()
-//                 .map(|(idx, v)| (idx as i32, *v as u32))
-//                 .collect::<Vec<_>>(),
-//             &BLUE,
-//         ))
-//         .unwrap();
-//     }
-
-//     img
-// }
-
-// #[derive(Clone, Debug, Serialize_repr)]
-// #[repr(u8)]
-// enum PixelOrder {
-//     BGR = 0,
-//     RGB = 1,
-// }
-
-// #[derive(Clone, Debug, Serialize)]
-// struct ImagePacket {
-//     w: u32,
-//     h: u32,
-//     pix: PixelOrder,
-//     #[serde(with = "serde_bytes")]
-//     img: Vec<u8>,
-// }
-
-// #[derive(Clone, Debug, Serialize)]
-// struct ControlValues {
-//     gain: i64,
-//     exposure: f64,
-//     wb_r: i64,
-//     wb_b: i64,
-// }
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -207,11 +63,11 @@ async fn main() -> Result<()> {
         .init();
 
     // Broadcast channel for WebSocket connections
-    let (tx, rx) = broadcast::channel(32);
-    let (tx_cmds, mut rx_cmds) = broadcast::channel(32);
+    let (tx, _rx) = broadcast::channel(32);
+    let (tx_cmds, rx_cmds) = broadcast::channel(32);
 
     let tx_thread = tx.clone();
-    let thread = std::thread::spawn(move || -> Result<()> {
+    let _thread = std::thread::spawn(move || -> Result<()> {
         println!("In thread!");
         let camera = get_camera_info()
             .next()
@@ -328,7 +184,7 @@ async fn handle_socket(stream: axum::extract::ws::WebSocket, state: WebSocketSta
     while let Some(Ok(msg)) = receiver.next().await {
         if let axum::extract::ws::Message::Text(text) = msg {
             let str = text.as_str();
-            if let Some((cmd, val)) = str.split_once(":") {
+            if let Some((cmd, val)) = str.split_once(':') {
                 let command = match cmd {
                     "SET_GAIN" => ControlMessages::SetGain(val.parse().unwrap()),
                     "SET_EXPOSURE" => ControlMessages::SetExposure(val.parse().unwrap()),
