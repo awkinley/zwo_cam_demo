@@ -11,18 +11,16 @@ name = "zwo_asi_rs"
 anyhow = "1.0.95"
 axum = { version = "0.8.1", features = ["ws"] }
 axum-extra = { version = "0.10.0", features = ["typed-header"] }
-base64 = "0.22.1"
 bytes = "1.9.0"
 futures = "0.3.31"
 futures-util = "0.3.31"
 image = "0.25.5"
-imageproc = { version = "0.25.0", features = ["display-window", "sdl2"] }
+imageproc = { version = "0.25.0" }
 libc = "0.2"
 opencv = { version = "0.93.5", default-features = false, features = [
     "photo",
     "imgcodecs",
     "imgproc",
-    "highgui",
     "clang-runtime",
 ] }
 plotters = "0.3.7"
