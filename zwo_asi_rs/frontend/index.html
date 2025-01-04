@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Webcam Stream Viewer</title>
+    <style>
+      canvas {
+        display: block;
+        margin: 0 auto;
+        background: #000;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="videoCanvas" width="1920" height="1080"></canvas>
+
+      <input type="number" id="gainInput" placeholder="Set gain value" />
+      <!-- <button onclick="updateGain()">Send Gain</button> -->
+      <br />
+      <input
+        type="number"
+        id="exposureInput"
+        placeholder="Set exposure duration (ms)"
+      />
+      <!-- <button onclick="updateExposure()">Send Exposure</button> -->
+      <br />
+      <input type="number" id="wbrInput" placeholder="White Balance Red" />
+      <!-- <button onclick="updateWbR()">Send WB R</button> -->
+      <br />
+      <input type="number" id="wbbInput" placeholder="White Balance Blue" />
+      <!-- <button onclick="updateWbB()">Send WB B</button> -->
+      <br />
+      <button id="switchOutput">Switch Output</button>
+      <br />
+      <button id="startCapture">Start Capture</button>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
