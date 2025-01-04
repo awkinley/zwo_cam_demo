@@ -1,7 +1,7 @@
 // import init, { handle_message } from "my-crate";
 
 // init();
-import { decode, decodeAsync } from "@msgpack/msgpack";
+import { decodeAsync } from "@msgpack/msgpack";
 
 function swizzle_bgr(bgrData, buffer) {
   for (let i = 0, j = 0; i < bgrData.length; i += 3, j += 4) {
@@ -43,7 +43,7 @@ async function handle_message(event) {
     const data = event.data;
 
     // Decode the MessagePack data
-    performance.mark("start decode msgpack");
+    // performance.mark("start decode msgpack");
     const rawData = await decodeAsync(data.stream());
     const type = rawData["type"];
     if (type == "Preview") {
@@ -51,12 +51,12 @@ async function handle_message(event) {
       update_controls(controls);
       // console.log(rawData["controls"]);
 
-      performance.mark("finish decode msgpack");
-      performance.measure(
-        "decode-duration",
-        "start decode msgpack",
-        "finish decode msgpack"
-      );
+      // performance.mark("finish decode msgpack");
+      // performance.measure(
+      //   "decode-duration",
+      //   "start decode msgpack",
+      //   "finish decode msgpack"
+      // );
 
       const bgrData = rawData["img"];
       // console.log(bgrData); // Logs the decoded object
@@ -66,7 +66,7 @@ async function handle_message(event) {
       }
 
       // Rearrange BGR to RGBA
-      performance.mark("start swizzle");
+      // performance.mark("start swizzle");
       // console.log(rawData["pix"]);
       const BGR = 0;
       const RGB = 1;
@@ -75,17 +75,17 @@ async function handle_message(event) {
       } else if (rawData["pix"] == RGB) {
         swizzle_rgb(bgrData, buffer);
       }
-      performance.mark("end swizzle");
-      performance.measure("swizzle-duration", "start swizzle", "end swizzle");
+      // performance.mark("end swizzle");
+      // performance.measure("swizzle-duration", "start swizzle", "end swizzle");
 
-      performance.mark("set image data");
+      // performance.mark("set image data");
       ctx.putImageData(imageData, 0, 0);
-      performance.mark("put image data");
-      performance.measure(
-        "put-image-data-duration",
-        "set image data",
-        "put image data"
-      );
+      // performance.mark("put image data");
+      // performance.measure(
+      //   "put-image-data-duration",
+      //   "set image data",
+      //   "put image data"
+      // );
     } else if (type == "CaptureStatus") {
       console.log(
         `Captured ${rawData["captured_frames"]} / ${rawData["total_frames"]} frames`
@@ -102,7 +102,8 @@ const ctx = canvas.getContext("2d");
 const imageData = ctx.createImageData(canvas.width, canvas.height);
 const buffer = imageData.data;
 
-const ws = new WebSocket("ws://localhost:3000/ws");
+// const ws = new WebSocket("ws://localhost:3000/ws");
+const ws = new WebSocket("/ws");
 
 ws.onopen = () => console.log("WebSocket connected");
 ws.onmessage = handle_message;
