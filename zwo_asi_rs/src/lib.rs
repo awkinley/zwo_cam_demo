@@ -1,6 +1,7 @@
-use std::thread::sleep;
+use std::{backtrace::Backtrace, thread::sleep};
 
 use asi::{ASICloseCamera, ROIFormat, ASI_ERROR, CONTROL_TYPE, EXPOSURE_STATUS};
+use tracing::info;
 
 pub mod asi;
 pub mod camera_controller;
@@ -57,6 +58,7 @@ impl Camera {
 
 pub struct OpenCamera<'a> {
     camera: &'a Camera,
+    close_on_drop: bool,
 }
 
 impl OpenCamera<'static> {
@@ -64,6 +66,7 @@ impl OpenCamera<'static> {
         unsafe {
             Self {
                 camera: std::mem::transmute::<&'a Camera, &'static Camera>(ccd.camera),
+                close_on_drop: false,
             }
         }
     }
@@ -72,7 +75,10 @@ impl OpenCamera<'static> {
 impl<'a> OpenCamera<'a> {
     pub fn new(camera: &'a Camera) -> Result<Self, ASI_ERROR> {
         unsafe { asi::open_camera(camera.info.CameraID)? }
-        Ok(Self { camera })
+        Ok(Self {
+            camera,
+            close_on_drop: true,
+        })
     }
 
     pub fn id(&self) -> i32 {
@@ -161,9 +167,16 @@ impl<'a> OpenCamera<'a> {
 
 impl Drop for OpenCamera<'_> {
     fn drop(&mut self) {
-        println!("Closing Camera {}", self.camera.get_name());
-        unsafe {
-            ASICloseCamera(self.camera.info.CameraID);
+        if self.close_on_drop {
+            info!(
+                "Closing Camera {}\n{}",
+                self.camera.get_name(),
+                Backtrace::capture()
+            );
+
+            unsafe {
+                ASICloseCamera(self.camera.info.CameraID);
+            }
         }
     }
 }

@@ -1,6 +1,7 @@
 use anyhow::Result;
 
 use tokio::{sync::broadcast, time};
+use tracing::{error, info};
 use zwo_asi_rs::{
     asi::{self},
     camera_controller::{
@@ -77,15 +78,15 @@ async fn main() -> Result<()> {
         let mut controller = match CameraController::new(&camera, tx_thread, rx_cmds) {
             Ok(c) => c,
             Err(e) => {
-                println!("Initializing CameraController failed with {e}");
-                panic!("Initializing CameraController failed with {e}");
+                error!("Initializing CameraController failed with {e:?}");
+                panic!("Initializing CameraController failed with {e:?}");
             }
         };
 
         match controller.run() {
             Err(e) => {
-                println!("Running CameraController failed with {e}");
-                panic!("Running CameraController failed with {e}");
+                error!("Running CameraController failed with {e:?}");
+                panic!("Running CameraController failed with {e:?}");
             }
             Ok(r) => Ok(r),
         }
@@ -226,7 +227,7 @@ async fn handle_socket(stream: axum::extract::ws::WebSocket, state: WebSocketSta
                         // break;
                     }
                     let send_end = std::time::Instant::now();
-                    println!("Sent messsage in {:?}", send_end - send_start);
+                    // println!("Sent messsage in {:?}", send_end - send_start);
                 }
                 Err(e) => {
                     println!("Getting msg to transmit failed with err {:?}", e);
@@ -279,6 +280,7 @@ async fn handle_socket(stream: axum::extract::ws::WebSocket, state: WebSocketSta
         }
     }
 
+    info!("Sending StopPreview message");
     state.tx.send(ControlMessages::StopPreview).unwrap();
     // Drop the broadcast receiver to stop the task
     tx_task.abort();

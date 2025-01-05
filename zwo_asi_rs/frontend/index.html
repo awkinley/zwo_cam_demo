@@ -1,40 +1,36 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" id="app-html">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Webcam Stream Viewer</title>
-    <style>
-      canvas {
-        display: block;
-        margin: 0 auto;
-        background: #000;
-      }
-    </style>
   </head>
-  <body>
+  <body id="app-body">
     <div id="app">
-      <canvas id="videoCanvas" width="960" height="540"></canvas>
-
-      <input type="number" id="gainInput" placeholder="Set gain value" />
-      <!-- <button onclick="updateGain()">Send Gain</button> -->
-      <br />
-      <input
-        type="number"
-        id="exposureInput"
-        placeholder="Set exposure duration (ms)"
-      />
-      <!-- <button onclick="updateExposure()">Send Exposure</button> -->
-      <br />
-      <input type="number" id="wbrInput" placeholder="White Balance Red" />
-      <!-- <button onclick="updateWbR()">Send WB R</button> -->
-      <br />
-      <input type="number" id="wbbInput" placeholder="White Balance Blue" />
-      <!-- <button onclick="updateWbB()">Send WB B</button> -->
-      <br />
-      <button id="switchOutput">Switch Output</button>
-      <br />
-      <button id="startCapture">Start Capture</button>
+      <div id="controls">
+        <input type="number" id="gainInput" placeholder="Set gain value" />
+        <input
+          type="number"
+          id="exposureInput"
+          placeholder="Set exposure duration (ms)"
+        />
+        <input type="number" id="wbrInput" placeholder="White Balance Red" />
+        <input type="number" id="wbbInput" placeholder="White Balance Blue" />
+        <button id="switchOutput">Switch Output</button>
+        <button id="startCapture">Start Capture</button>
+        <button id="fullScreen">Full Screen</button>
+      </div>
+      <canvas id="videoCanvas"></canvas>
+      <div id="infoPanel">
+        <div id="debugInfo">
+          <h3>Debug Info</h3>
+          <div id="infoContent">No data yet.</div>
+        </div>
+        <div id="log">
+          <h3>Log</h3>
+          <div id="logContent"></div>
+        </div>
+      </div>
     </div>
     <script type="module" src="/src/main.js"></script>
   </body>

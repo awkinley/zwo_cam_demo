@@ -2,7 +2,7 @@ use std::{
     ops::Deref,
     sync::{atomic::AtomicBool, Arc, Mutex},
     thread::{sleep, JoinHandle},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use opencv::{
@@ -12,13 +12,14 @@ use opencv::{
 use serde::Serialize;
 use serde_repr::Serialize_repr;
 
-use anyhow::{anyhow, Result};
-use image::{ImageBuffer, Rgb, RgbImage};
+use anyhow::{anyhow, Context, Result};
+use image::{ImageBuffer, Luma, Rgb, RgbImage};
 
 use imageproc::stats::ChannelHistogram;
 
 use plotters::prelude::*;
 use tokio::sync::broadcast::{self, Receiver, Sender};
+use tracing::{error, info};
 
 use crate::{
     asi::{self, ASI_ERROR},
@@ -75,16 +76,29 @@ fn make_hist_plot(hist: &ChannelHistogram) -> RgbImage {
             .unwrap();
         ctx.configure_mesh().draw().unwrap();
 
-        for (channel, color) in hist.channels.iter().zip([&RED, &GREEN, &BLUE]) {
+        if hist.channels.len() == 1 {
             ctx.draw_series(LineSeries::new(
-                channel
+                hist.channels[0]
                     .iter()
                     .enumerate()
                     .map(|(idx, v)| (idx as i32, *v))
                     .collect::<Vec<_>>(),
-                color,
+                &BLACK,
             ))
             .unwrap();
+        }
+        if hist.channels.len() == 3 {
+            for (channel, color) in hist.channels.iter().zip([&RED, &GREEN, &BLUE]) {
+                ctx.draw_series(LineSeries::new(
+                    channel
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, v)| (idx as i32, *v))
+                        .collect::<Vec<_>>(),
+                    color,
+                ))
+                .unwrap();
+            }
         }
     }
 
@@ -180,9 +194,12 @@ impl<'a> VideoStreamer<'a> {
                 .store(true, std::sync::atomic::Ordering::Relaxed);
 
             if !self.stop_msg.is_empty() {
+                info!("Breaking out of VideoStreamer loop");
                 break;
             }
         }
+
+        info!("Stopping video capture");
         self.ccd.stop_video_capture()?;
         Ok(())
     }
@@ -258,14 +275,19 @@ impl<'a> CameraController<'a> {
                 let thread_frame_avail = self.frame_available.clone();
                 let thread_latest_frame = self.latest_frame.clone();
                 let thread = std::thread::spawn(move || {
-                    let mut streamer = VideoStreamer::new(
+                    let mut streamer = match VideoStreamer::new(
                         static_camera,
                         rx,
                         thread_latest_frame,
                         thread_frame_avail,
-                    )
-                    .unwrap();
-                    streamer.run().unwrap();
+                    ) {
+                        Ok(t) => t,
+                        Err(e) => {
+                            error!("Starting video streamer failed with error {:?}", e);
+                            return;
+                        }
+                    };
+                    let _ = streamer.run();
                 });
                 self.stop_msg = Some(tx);
                 self.streamer_thread = Some(thread);
@@ -285,6 +307,7 @@ impl<'a> CameraController<'a> {
         match self.state {
             CamState::Stopped => Ok(()),
             CamState::Preview { show_hist: _ } => {
+                info!("Stopping preview");
                 if let Some(tx) = self.stop_msg.take() {
                     tx.send(true)?;
                 }
@@ -303,7 +326,7 @@ impl<'a> CameraController<'a> {
     }
 
     fn handle_command(&mut self, cmd: ControlMessages) -> Result<()> {
-        println!("Received command {:?}", cmd);
+        info!("Received command {:?}", cmd);
         match cmd {
             ControlMessages::SetGain(gain) => self.set_gain(gain, false)?,
             ControlMessages::SetExposure(exp) => self.set_exposure(exp, false)?,
@@ -317,6 +340,9 @@ impl<'a> CameraController<'a> {
             ControlMessages::StartPreview => self.start_video()?,
             ControlMessages::StopPreview => self.stop_video()?,
             ControlMessages::StartCapture(total_frames) => {
+                if let CamState::Preview { show_hist: _ } = self.state {
+                    self.stop_video()?;
+                }
                 self.state = CamState::Capture { total_frames }
             }
         }
@@ -386,17 +412,25 @@ impl<'a> CameraController<'a> {
         //self.ccd.take_exposure(img.as_flat_samples_mut().samples);
         // self.ccd
         //     .get_video_data(img.as_flat_samples_mut().samples, 500)?;
-        let img = ImageBuffer::<Rgb<u8>, _>::from_raw(self.width, self.height, &img_buffer[..])
-            .ok_or(anyhow!("ImageBuffer::from_raw failed!"))?;
-
+        let hist_result = if self.width * self.height == img_buffer.len() as u32 {
+            let img =
+                ImageBuffer::<Luma<u8>, _>::from_raw(self.width, self.height, &img_buffer[..])
+                    .ok_or(anyhow!("ImageBuffer::from_raw failed!"))?;
+            histogram(&img)
+        } else {
+            let img = ImageBuffer::<Rgb<u8>, _>::from_raw(self.width, self.height, &img_buffer[..])
+                .ok_or(anyhow!("ImageBuffer::from_raw failed!"))?;
+            let mut hist_result = histogram(&img);
+            hist_result.channels.swap(0, 2);
+            hist_result
+        };
         let end = std::time::Instant::now();
         // let dropped_frames = self.ccd.get_dropped_frames()?;
         // println!("Get image data for histogram took {:?}", end - start);
         // let mut img = ImageBuffer::<Rgb<u8>, &[u8]>::new(self.width, self.height);
 
-        let mut hist_result = histogram(&img);
+        // let mut hist_result = histogram(&img);
         // handle bgr -> rgb conversion
-        hist_result.channels.swap(0, 2);
 
         let hist_img = make_hist_plot(&hist_result);
         // hist_img.write_to(&mut Cursor::new(&mut png_bytes), image::ImageFormat::Jpeg)?;
@@ -412,6 +446,7 @@ impl<'a> CameraController<'a> {
     fn capture_loop(&self, total_frames: i32) -> Result<()> {
         println!("Starting capture loop");
 
+        self.ccd.start_video_capture()?;
         let typ = CV_8UC3;
         let mut frame = Mat::new_rows_cols_with_default(
             self.width as i32,
@@ -424,17 +459,23 @@ impl<'a> CameraController<'a> {
         let mut params = opencv::core::Vector::<i32>::new();
         params.push(opencv::imgcodecs::IMWRITE_TIFF_COMPRESSION);
         params.push(1);
+        std::fs::DirBuilder::new().create("./images/")?;
+        let start = SystemTime::now();
+        let since_the_epoch = start
+            .duration_since(UNIX_EPOCH)
+            .expect("Time went backwards");
 
         for i in 0..total_frames {
             self.ccd.get_video_data(frame.data_bytes_mut()?, 500)?;
 
-            let file_name = format!("frame_{i}.tiff");
+            let file_name = format!("./images/{}_{i}.tiff", since_the_epoch.as_secs());
             imgcodecs::imwrite(&file_name, &frame, &params)?;
             self.tx.send(ClientPacket::CaptureStatus(CaptureStatus {
                 captured_frames: i + 1,
                 total_frames,
             }))?;
         }
+        self.ccd.stop_video_capture()?;
         println!("Finished capture loop");
 
         Ok(())
@@ -471,23 +512,29 @@ impl<'a> CameraController<'a> {
                     if self.tx.len() >= 1 {
                         sleep(std::time::Duration::from_millis(1));
                     } else {
-                        if show_hist {
-                            self.tx.send(self.make_histogram()?)?;
+                        let packet = if show_hist {
+                            self.make_histogram().context("Error making histogram")?
                         } else {
-                            let start = std::time::Instant::now();
-                            self.tx.send(self.make_preview()?)?;
-                            let stop = std::time::Instant::now();
-                            println!("Make preview took {:?}", stop - start);
-                        }
+                            // let start = std::time::Instant::now();
+                            self.make_preview().context("Error making preview")?
+                            // let stop = std::time::Instant::now();
+                            // println!("Make preview took {:?}", stop - start);
+                        };
+                        match self.tx.send(packet) {
+                            Ok(_) => {}
+                            Err(_) => self.stop_video()?,
+                        };
                     }
                 }
                 Capture { total_frames } => {
-                    self.capture_loop(total_frames)?;
-                    self.state = Preview { show_hist: false };
+                    self.capture_loop(total_frames)
+                        .context("Calling capture loop")?;
+                    self.state = CamState::Stopped;
+                    self.start_video()?;
                 }
             }
 
-            self.handle_commands()?;
+            self.handle_commands().context("Error handling commands.")?;
         }
     }
 }
