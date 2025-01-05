@@ -277,7 +277,13 @@ impl<'a> CameraController<'a> {
         println!("Starting capture loop");
 
         let typ = CV_8UC3;
-        let mut frame = Mat::new_rows_cols_with_default(self.width as i32, self.height as i32, typ, Scalar::all(0.)).unwrap();
+        let mut frame = Mat::new_rows_cols_with_default(
+            self.width as i32,
+            self.height as i32,
+            typ,
+            Scalar::all(0.),
+        )
+        .unwrap();
 
         let mut params = opencv::core::Vector::<i32>::new();
         params.push(opencv::imgcodecs::IMWRITE_TIFF_COMPRESSION);
@@ -303,8 +309,12 @@ impl<'a> CameraController<'a> {
         self.width = 1920 / bin;
         self.height = 1080 / bin;
 
-        self.ccd
-            .set_roi_format(self.width as i32, self.height as i32, bin as i32, asi::IMG_TYPE::RGB24)?;
+        self.ccd.set_roi_format(
+            self.width as i32,
+            self.height as i32,
+            bin as i32,
+            asi::IMG_TYPE::RGB24,
+        )?;
 
         self.set_gain(300, false)?;
         self.set_exposure(100.0, false)?;
@@ -324,8 +334,7 @@ impl<'a> CameraController<'a> {
                 Preview { show_hist } => {
                     if self.tx.len() >= 1 {
                         sleep(std::time::Duration::from_millis(1));
-                    }
-                    else {
+                    } else {
                         if show_hist {
                             self.tx.send(self.make_histogram(&mut img)?)?;
                         } else {
@@ -334,7 +343,6 @@ impl<'a> CameraController<'a> {
                             let stop = std::time::Instant::now();
                             println!("Make preview took {:?}", stop - start);
                         }
-
                     }
                 }
                 Capture { total_frames } => {

@@ -3,7 +3,9 @@ use anyhow::Result;
 use tokio::sync::broadcast;
 use zwo_asi_rs::{
     asi::{self},
-    camera_controller::{ControlValues, CameraController, ClientPacket, ControlMessages, ImagePacket, PixelOrder},
+    camera_controller::{
+        CameraController, ClientPacket, ControlMessages, ControlValues, ImagePacket, PixelOrder,
+    },
     Camera,
 };
 
@@ -116,9 +118,7 @@ async fn main() -> Result<()> {
         );
 
     // Start the server
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:80")
-        .await
-        .unwrap();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:80").await.unwrap();
     tracing::debug!("listening on {}", listener.local_addr().unwrap());
     axum::serve(
         listener,
@@ -154,7 +154,6 @@ async fn handle_socket(stream: axum::extract::ws::WebSocket, state: WebSocketSta
     let mut transmit_rx = state.rx.subscribe();
     // Spawn a task to send broadcasted messages to this client
     let tx_task = tokio::spawn(async move {
-
         //let controls = ControlValues {
         //    gain: 0,
         //    exposure: 0.,
@@ -206,7 +205,7 @@ async fn handle_socket(stream: axum::extract::ws::WebSocket, state: WebSocketSta
                     //     msg.serialize(&mut serializer).unwrap();
                     // }
                     // let packet = serializer.get_ref();
-                     //let buf: &mut Vec<u8> = msgpack_data.as_mut();
+                    //let buf: &mut Vec<u8> = msgpack_data.as_mut();
                     //let start = std::time::Instant::now();
                     let mut buf = Vec::new();
                     // rmp::encode::write_map_len(&mut buf, 1);
@@ -221,17 +220,13 @@ async fn handle_socket(stream: axum::extract::ws::WebSocket, state: WebSocketSta
                     //println!("Generated ws_message in {:?}, size = {}KB", end - middle, num_bytes / 1024);
 
                     let send_start = std::time::Instant::now();
-                    if sender
-                        .send(ws_message)
-                        .await
-                        .is_err()
-                    {
+                    if sender.send(ws_message).await.is_err() {
                         println!("Sending message failed");
                         // break;
                     }
                     let send_end = std::time::Instant::now();
                     println!("Sent messsage in {:?}", send_end - send_start);
-                },
+                }
                 Err(e) => {
                     println!("Getting msg to transmit failed with err {:?}", e);
                     break;
