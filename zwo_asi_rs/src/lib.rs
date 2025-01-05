@@ -1,6 +1,6 @@
 use std::thread::sleep;
 
-use asi::{ASICloseCamera, ASI_ERROR, CONTROL_TYPE, EXPOSURE_STATUS};
+use asi::{ASICloseCamera, ROIFormat, ASI_ERROR, CONTROL_TYPE, EXPOSURE_STATUS};
 
 pub mod asi;
 pub mod camera_controller;
@@ -59,6 +59,16 @@ pub struct OpenCamera<'a> {
     camera: &'a Camera,
 }
 
+impl OpenCamera<'static> {
+    pub fn make_static<'a>(ccd: &OpenCamera<'a>) -> Self {
+        unsafe {
+            Self {
+                camera: std::mem::transmute::<&'a Camera, &'static Camera>(ccd.camera),
+            }
+        }
+    }
+}
+
 impl<'a> OpenCamera<'a> {
     pub fn new(camera: &'a Camera) -> Result<Self, ASI_ERROR> {
         unsafe { asi::open_camera(camera.info.CameraID)? }
@@ -100,6 +110,10 @@ impl<'a> OpenCamera<'a> {
         unsafe { asi::set_roi_format(self.id(), width, height, bin, img_type) }
     }
 
+    pub fn get_roi_format(&self) -> Result<ROIFormat, ASI_ERROR> {
+        unsafe { asi::get_roi_format(self.id()) }
+    }
+
     pub fn start_exposure(&self) -> Result<(), ASI_ERROR> {
         unsafe { asi::start_exposure(self.id(), false) }
     }
@@ -134,6 +148,10 @@ impl<'a> OpenCamera<'a> {
     }
     pub fn stop_video_capture(&self) -> Result<(), ASI_ERROR> {
         unsafe { asi::stop_video_capture(self.id()) }
+    }
+
+    pub fn get_dropped_frames(&self) -> Result<i32, ASI_ERROR> {
+        unsafe { asi::get_dropped_frames(self.id()) }
     }
 
     pub fn get_video_data(&self, data: &mut [u8], wait_ms: i32) -> Result<(), ASI_ERROR> {

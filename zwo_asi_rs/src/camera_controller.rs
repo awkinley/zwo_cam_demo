@@ -1,4 +1,9 @@
-use std::thread::sleep;
+use std::{
+    ops::Deref,
+    sync::{atomic::AtomicBool, Arc, Mutex},
+    thread::{sleep, JoinHandle},
+    time::Duration,
+};
 
 use opencv::{
     core::{Mat, MatTraitManual, Scalar, CV_8UC3},
@@ -7,13 +12,13 @@ use opencv::{
 use serde::Serialize;
 use serde_repr::Serialize_repr;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use image::{ImageBuffer, Rgb, RgbImage};
 
 use imageproc::stats::ChannelHistogram;
 
 use plotters::prelude::*;
-use tokio::sync::broadcast::{Receiver, Sender};
+use tokio::sync::broadcast::{self, Receiver, Sender};
 
 use crate::{
     asi::{self, ASI_ERROR},
@@ -32,11 +37,27 @@ pub enum ControlMessages {
     StartCapture(i32),
 }
 
+pub fn histogram<P, Container>(image: &ImageBuffer<P, Container>) -> ChannelHistogram
+where
+    P: image::Pixel<Subpixel = u8>,
+    Container: Deref<Target = [P::Subpixel]>,
+{
+    let mut hist = vec![[0u32; 256]; P::CHANNEL_COUNT as usize];
+
+    for pix in image.pixels() {
+        for (i, c) in pix.channels().iter().enumerate() {
+            hist[i][*c as usize] += 1;
+        }
+    }
+
+    ChannelHistogram { channels: hist }
+}
+
 fn make_hist_plot(hist: &ChannelHistogram) -> RgbImage {
-    let mut img = RgbImage::new(1920 / 2, 1080 / 2);
+    let mut img = RgbImage::new(1920, 1080);
     {
         let drawing_area =
-            BitMapBackend::with_buffer(img.as_flat_samples_mut().samples, (1920 / 2, 1080 / 2))
+            BitMapBackend::with_buffer(img.as_flat_samples_mut().samples, (1920, 1080))
                 .into_drawing_area();
 
         drawing_area.fill(&WHITE).unwrap();
@@ -114,6 +135,58 @@ enum CamState {
     Capture { total_frames: i32 },
 }
 
+struct VideoStreamer<'a> {
+    ccd: OpenCamera<'a>,
+    latest_frame: Arc<Mutex<Vec<u8>>>,
+    current_frame: Vec<u8>,
+    stop_msg: Receiver<bool>,
+    frame_available: Arc<AtomicBool>,
+}
+
+impl<'a> VideoStreamer<'a> {
+    pub fn new(
+        ccd: OpenCamera<'a>,
+        stop_msg: Receiver<bool>,
+        latest_frame: Arc<Mutex<Vec<u8>>>,
+        frame_available: Arc<AtomicBool>,
+    ) -> Result<VideoStreamer<'a>> {
+        let roi_format = ccd.get_roi_format()?;
+        let buf_size = roi_format.width * roi_format.height * roi_format.img_type.bytes_per_pixel();
+        let buf_one = vec![0; buf_size as usize];
+        let buf_two = vec![0; buf_size as usize];
+        {
+            let mut locked_latest = latest_frame.lock().unwrap();
+            *locked_latest = buf_one;
+        }
+
+        Ok(Self {
+            ccd,
+            latest_frame,
+            current_frame: buf_two,
+            stop_msg,
+            frame_available,
+        })
+    }
+
+    pub fn run(&mut self) -> Result<()> {
+        self.ccd.start_video_capture()?;
+        loop {
+            self.ccd.get_video_data(&mut self.current_frame, 500)?;
+
+            let mut latest_frame = self.latest_frame.lock().unwrap();
+            std::mem::swap(&mut self.current_frame, &mut latest_frame);
+            self.frame_available
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+
+            if !self.stop_msg.is_empty() {
+                break;
+            }
+        }
+        self.ccd.stop_video_capture()?;
+        Ok(())
+    }
+}
+
 pub struct CameraController<'a> {
     camera: &'a Camera,
     ccd: OpenCamera<'a>,
@@ -122,6 +195,10 @@ pub struct CameraController<'a> {
     state: CamState,
     width: u32,
     height: u32,
+    stop_msg: Option<Sender<bool>>,
+    latest_frame: Arc<Mutex<Vec<u8>>>,
+    frame_available: Arc<AtomicBool>,
+    streamer_thread: Option<JoinHandle<()>>,
 }
 
 impl<'a> CameraController<'a> {
@@ -141,6 +218,10 @@ impl<'a> CameraController<'a> {
             state: CamState::Stopped,
             width: 1920,
             height: 1080,
+            stop_msg: None,
+            latest_frame: Arc::new(Mutex::new(Vec::new())),
+            frame_available: Arc::new(AtomicBool::new(false)),
+            streamer_thread: None,
         })
     }
 
@@ -170,7 +251,24 @@ impl<'a> CameraController<'a> {
     fn start_video(&mut self) -> Result<()> {
         match self.state {
             CamState::Stopped => {
-                self.ccd.start_video_capture()?;
+                let (tx, rx) = broadcast::channel(1);
+
+                let static_camera = OpenCamera::make_static(&self.ccd);
+                let thread_frame_avail = self.frame_available.clone();
+                let thread_latest_frame = self.latest_frame.clone();
+                let thread = std::thread::spawn(move || {
+                    let mut streamer = VideoStreamer::new(
+                        static_camera,
+                        rx,
+                        thread_latest_frame,
+                        thread_frame_avail,
+                    )
+                    .unwrap();
+                    streamer.run().unwrap();
+                });
+                self.stop_msg = Some(tx);
+                self.streamer_thread = Some(thread);
+                // self.ccd.start_video_capture()?;
                 self.state = CamState::Preview { show_hist: false };
                 println!("Starting camera video");
                 Ok(())
@@ -186,7 +284,13 @@ impl<'a> CameraController<'a> {
         match self.state {
             CamState::Stopped => Ok(()),
             CamState::Preview { show_hist: _ } => {
-                self.ccd.stop_video_capture()?;
+                if let Some(tx) = self.stop_msg.take() {
+                    tx.send(true)?;
+                }
+                if let Some(handle) = self.streamer_thread.take() {
+                    handle.join().unwrap();
+                }
+                // self.ccd.stop_video_capture()?;
                 self.state = CamState::Stopped;
                 println!("Stopped camera video");
                 Ok(())
@@ -238,10 +342,24 @@ impl<'a> CameraController<'a> {
         })
     }
     fn make_preview(&self, img_buffer: &mut [u8]) -> Result<ClientPacket> {
-        let start = std::time::Instant::now();
+        // let start = std::time::Instant::now();
         //self.ccd.take_exposure(img_buffer);
-        self.ccd.get_video_data(img_buffer, 500)?;
-        let end = std::time::Instant::now();
+        // self.ccd.get_video_data(img_buffer, 500)?;
+        while !self
+            .frame_available
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            sleep(Duration::from_micros(500));
+        }
+        let img_buffer = self.latest_frame.lock().unwrap();
+        self.frame_available
+            .store(false, std::sync::atomic::Ordering::Release);
+        // let end = std::time::Instant::now();
+        // let dropped_frames = self.ccd.get_dropped_frames()?;
+        // println!(
+        //     "Get video data took {:?}, dropped {dropped_frames} frames",
+        //     end - start
+        // );
         // println!("Get data for preview in {:?}", end - start);
 
         Ok(ClientPacket::Preview(ImagePacket {
@@ -254,11 +372,28 @@ impl<'a> CameraController<'a> {
     }
 
     fn make_histogram(&self, img: &mut ImageBuffer<Rgb<u8>, Vec<u8>>) -> Result<ClientPacket> {
+        let start = std::time::Instant::now();
+        while !self
+            .frame_available
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            sleep(Duration::from_micros(500));
+        }
+        let img_buffer = self.latest_frame.lock().unwrap();
+        self.frame_available
+            .store(false, std::sync::atomic::Ordering::Release);
         //self.ccd.take_exposure(img.as_flat_samples_mut().samples);
-        self.ccd
-            .get_video_data(img.as_flat_samples_mut().samples, 500)?;
+        // self.ccd
+        //     .get_video_data(img.as_flat_samples_mut().samples, 500)?;
+        let img = ImageBuffer::<Rgb<u8>, _>::from_raw(self.width, self.height, &img_buffer[..])
+            .ok_or(anyhow!("ImageBuffer::from_raw failed!"))?;
 
-        let mut hist_result = imageproc::stats::histogram(img);
+        let end = std::time::Instant::now();
+        // let dropped_frames = self.ccd.get_dropped_frames()?;
+        // println!("Get image data for histogram took {:?}", end - start);
+        // let mut img = ImageBuffer::<Rgb<u8>, &[u8]>::new(self.width, self.height);
+
+        let mut hist_result = histogram(&img);
         // handle bgr -> rgb conversion
         hist_result.channels.swap(0, 2);
 
@@ -316,12 +451,12 @@ impl<'a> CameraController<'a> {
             asi::IMG_TYPE::RGB24,
         )?;
 
-        self.set_gain(300, false)?;
-        self.set_exposure(100.0, false)?;
+        self.set_gain(200, false)?;
+        self.set_exposure(10.0, false)?;
         self.set_white_balance_blue(87, false)?;
         self.set_white_balance_red(45, false)?;
         self.ccd
-            .set_control_value(asi::CONTROL_TYPE::BANDWIDTHOVERLOAD, 50, false)?;
+            .set_control_value(asi::CONTROL_TYPE::BANDWIDTHOVERLOAD, 100, false)?;
 
         let buf_size = self.width * self.height * 3;
         let mut img = RgbImage::new(self.width as u32, self.height as u32);

@@ -2,6 +2,8 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 
+use std::ffi::c_int;
+
 use thiserror::Error;
 
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
@@ -115,6 +117,30 @@ pub enum IMG_TYPE {
     Y8 = ASI_IMG_TYPE_ASI_IMG_Y8,
 }
 
+impl IMG_TYPE {
+    pub fn bytes_per_pixel(&self) -> i32 {
+        match self {
+            IMG_TYPE::RAW8 => 1,
+            IMG_TYPE::RGB24 => 3,
+            IMG_TYPE::RAW16 => 2,
+            IMG_TYPE::Y8 => 1,
+        }
+    }
+}
+
+impl TryFrom<i32> for IMG_TYPE {
+    type Error = ASI_ERROR;
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        match value {
+            ASI_IMG_TYPE_ASI_IMG_RAW8 => Ok(Self::RAW8),
+            ASI_IMG_TYPE_ASI_IMG_RGB24 => Ok(Self::RGB24),
+            ASI_IMG_TYPE_ASI_IMG_RAW16 => Ok(Self::RAW16),
+            ASI_IMG_TYPE_ASI_IMG_Y8 => Ok(Self::Y8),
+            _ => Err(ASI_ERROR::UNKNOWN),
+        }
+    }
+}
+
 pub unsafe fn set_roi_format(
     iCameraID: ::std::os::raw::c_int,
     iWidth: ::std::os::raw::c_int,
@@ -129,6 +155,35 @@ pub unsafe fn set_roi_format(
         iBin,
         Img_type as i32,
     ))
+}
+
+pub struct ROIFormat {
+    pub width: i32,
+    pub height: i32,
+    pub bin: i32,
+    pub img_type: IMG_TYPE,
+}
+
+pub unsafe fn get_roi_format(iCameraID: ::std::os::raw::c_int) -> Result<ROIFormat, ASI_ERROR> {
+    let mut width: c_int = 0;
+    let mut height: c_int = 0;
+    let mut bin: c_int = 0;
+    let mut img_type: c_int = 0;
+    check_error_code(ASIGetROIFormat(
+        iCameraID,
+        &mut width,
+        &mut height,
+        &mut bin,
+        &mut img_type,
+    ))?;
+
+    let img_type = IMG_TYPE::try_from(img_type)?;
+    Ok(ROIFormat {
+        width,
+        height,
+        bin,
+        img_type,
+    })
 }
 
 #[repr(u32)]
@@ -243,6 +298,13 @@ pub unsafe fn start_video_capture(iCameraID: ::std::os::raw::c_int) -> Result<()
 
 pub unsafe fn stop_video_capture(iCameraID: ::std::os::raw::c_int) -> Result<(), ASI_ERROR> {
     unsafe { check_error_code(ASIStopVideoCapture(iCameraID)) }
+}
+pub unsafe fn get_dropped_frames(iCameraID: ::std::os::raw::c_int) -> Result<i32, ASI_ERROR> {
+    unsafe {
+        let mut dropped_frames: std::os::raw::c_int = 0;
+        check_error_code(ASIGetDroppedFrames(iCameraID, &mut dropped_frames))?;
+        Ok(dropped_frames)
+    }
 }
 
 pub unsafe fn get_video_data(

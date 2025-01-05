@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use tokio::sync::broadcast;
+use tokio::{sync::broadcast, time};
 use zwo_asi_rs::{
     asi::{self},
     camera_controller::{
@@ -17,7 +17,7 @@ use axum::{
     Router,
 };
 use axum_extra::{headers, TypedHeader};
-use std::net::SocketAddr;
+use std::{net::SocketAddr, time::Duration};
 use tower_http::{
     services::ServeDir,
     trace::{DefaultMakeSpan, TraceLayer},
@@ -118,7 +118,7 @@ async fn main() -> Result<()> {
         );
 
     // Start the server
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:80").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     tracing::debug!("listening on {}", listener.local_addr().unwrap());
     axum::serve(
         listener,
@@ -200,7 +200,7 @@ async fn handle_socket(stream: axum::extract::ws::WebSocket, state: WebSocketSta
         loop {
             match transmit_rx.recv().await {
                 Ok(msg) => {
-                    println!("Recived a msg to trasnmit");
+                    // println!("Recived a msg to trasnmit");
                     // {
                     //     msg.serialize(&mut serializer).unwrap();
                     // }
@@ -220,6 +220,7 @@ async fn handle_socket(stream: axum::extract::ws::WebSocket, state: WebSocketSta
                     //println!("Generated ws_message in {:?}, size = {}KB", end - middle, num_bytes / 1024);
 
                     let send_start = std::time::Instant::now();
+                    // time::sleep(Duration::from_millis(500)).await;
                     if sender.send(ws_message).await.is_err() {
                         println!("Sending message failed");
                         // break;

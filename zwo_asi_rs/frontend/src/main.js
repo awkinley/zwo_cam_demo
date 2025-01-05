@@ -58,7 +58,7 @@ async function handle_message(event) {
       // console.log(rawData["controls"]);
       let w = rawData["w"];
       let h = rawData["h"];
-      let change_size = (canvas.width != w) || (canvas.height != h);
+      let change_size = canvas.width != w || canvas.height != h;
       if (change_size) {
         canvas.width = w;
         canvas.height = h;
@@ -110,7 +110,6 @@ async function handle_message(event) {
     console.error("Error processing image data:", error);
   }
 }
-
 
 // const ws = new WebSocket("ws://localhost:3000/ws");
 const ws = new WebSocket("/ws");
