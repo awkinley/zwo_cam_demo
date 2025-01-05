@@ -33,10 +33,10 @@ pub enum ControlMessages {
 }
 
 fn make_hist_plot(hist: &ChannelHistogram) -> RgbImage {
-    let mut img = RgbImage::new(1920, 1080);
+    let mut img = RgbImage::new(1920 / 2, 1080 / 2);
     {
         let drawing_area =
-            BitMapBackend::with_buffer(img.as_flat_samples_mut().samples, (1920, 1080))
+            BitMapBackend::with_buffer(img.as_flat_samples_mut().samples, (1920 / 2, 1080 / 2))
                 .into_drawing_area();
 
         drawing_area.fill(&WHITE).unwrap();
@@ -92,20 +92,20 @@ pub enum PixelOrder {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ImagePacket {
-    w: u32,
-    h: u32,
-    pix: PixelOrder,
+    pub w: u32,
+    pub h: u32,
+    pub pix: PixelOrder,
     #[serde(with = "serde_bytes")]
-    img: Vec<u8>,
-    controls: ControlValues,
+    pub img: Vec<u8>,
+    pub controls: ControlValues,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ControlValues {
-    gain: i64,
-    exposure: f64,
-    wb_r: i64,
-    wb_b: i64,
+    pub gain: i64,
+    pub exposure: f64,
+    pub wb_r: i64,
+    pub wb_b: i64,
 }
 
 enum CamState {
@@ -120,6 +120,8 @@ pub struct CameraController<'a> {
     tx: Sender<ClientPacket>,
     rx: Receiver<ControlMessages>,
     state: CamState,
+    width: u32,
+    height: u32,
 }
 
 impl<'a> CameraController<'a> {
@@ -137,6 +139,8 @@ impl<'a> CameraController<'a> {
             tx,
             rx,
             state: CamState::Stopped,
+            width: 1920,
+            height: 1080,
         })
     }
 
@@ -234,11 +238,15 @@ impl<'a> CameraController<'a> {
         })
     }
     fn make_preview(&self, img_buffer: &mut [u8]) -> Result<ClientPacket> {
+        let start = std::time::Instant::now();
+        //self.ccd.take_exposure(img_buffer);
         self.ccd.get_video_data(img_buffer, 500)?;
+        let end = std::time::Instant::now();
+        // println!("Get data for preview in {:?}", end - start);
 
         Ok(ClientPacket::Preview(ImagePacket {
-            w: 1920,
-            h: 1080,
+            w: self.width,
+            h: self.height,
             pix: PixelOrder::BGR,
             img: img_buffer.to_vec(),
             controls: self.get_controls()?,
@@ -246,6 +254,7 @@ impl<'a> CameraController<'a> {
     }
 
     fn make_histogram(&self, img: &mut ImageBuffer<Rgb<u8>, Vec<u8>>) -> Result<ClientPacket> {
+        //self.ccd.take_exposure(img.as_flat_samples_mut().samples);
         self.ccd
             .get_video_data(img.as_flat_samples_mut().samples, 500)?;
 
@@ -256,8 +265,8 @@ impl<'a> CameraController<'a> {
         let hist_img = make_hist_plot(&hist_result);
         // hist_img.write_to(&mut Cursor::new(&mut png_bytes), image::ImageFormat::Jpeg)?;
         Ok(ClientPacket::Preview(ImagePacket {
-            w: 1920,
-            h: 1080,
+            w: self.width,
+            h: self.height,
             pix: PixelOrder::RGB,
             img: hist_img.into_vec(),
             controls: self.get_controls()?,
@@ -268,7 +277,7 @@ impl<'a> CameraController<'a> {
         println!("Starting capture loop");
 
         let typ = CV_8UC3;
-        let mut frame = Mat::new_rows_cols_with_default(1080, 1920, typ, Scalar::all(0.)).unwrap();
+        let mut frame = Mat::new_rows_cols_with_default(self.width as i32, self.height as i32, typ, Scalar::all(0.)).unwrap();
 
         let mut params = opencv::core::Vector::<i32>::new();
         params.push(opencv::imgcodecs::IMWRITE_TIFF_COMPRESSION);
@@ -290,31 +299,42 @@ impl<'a> CameraController<'a> {
     }
 
     pub fn run(&mut self) -> Result<()> {
-        let width = 1920usize;
-        let height = 1080usize;
+        let bin = 1;
+        self.width = 1920 / bin;
+        self.height = 1080 / bin;
+
         self.ccd
-            .set_roi_format(width as i32, height as i32, 1, asi::IMG_TYPE::RGB24)?;
+            .set_roi_format(self.width as i32, self.height as i32, bin as i32, asi::IMG_TYPE::RGB24)?;
 
         self.set_gain(300, false)?;
-        self.set_exposure(30.0, false)?;
+        self.set_exposure(100.0, false)?;
         self.set_white_balance_blue(87, false)?;
         self.set_white_balance_red(45, false)?;
         self.ccd
             .set_control_value(asi::CONTROL_TYPE::BANDWIDTHOVERLOAD, 50, false)?;
 
-        let buf_size = width * height * 3;
-        let mut img = RgbImage::new(width as u32, height as u32);
-        let mut img_buffer = vec![0; buf_size];
+        let buf_size = self.width * self.height * 3;
+        let mut img = RgbImage::new(self.width as u32, self.height as u32);
+        let mut img_buffer = vec![0; buf_size as usize];
 
         loop {
             use CamState::*;
             match self.state {
                 Stopped => sleep(std::time::Duration::from_millis(1)),
                 Preview { show_hist } => {
-                    if show_hist {
-                        self.tx.send(self.make_histogram(&mut img)?)?;
-                    } else {
-                        self.tx.send(self.make_preview(&mut img_buffer)?)?;
+                    if self.tx.len() >= 1 {
+                        sleep(std::time::Duration::from_millis(1));
+                    }
+                    else {
+                        if show_hist {
+                            self.tx.send(self.make_histogram(&mut img)?)?;
+                        } else {
+                            let start = std::time::Instant::now();
+                            self.tx.send(self.make_preview(&mut img_buffer)?)?;
+                            let stop = std::time::Instant::now();
+                            println!("Make preview took {:?}", stop - start);
+                        }
+
                     }
                 }
                 Capture { total_frames } => {

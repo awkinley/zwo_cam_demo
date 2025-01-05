@@ -37,6 +37,12 @@ function update_controls(controls) {
   }
 }
 
+const canvas = document.getElementById("videoCanvas");
+const ctx = canvas.getContext("2d");
+
+let imageData = ctx.createImageData(canvas.width, canvas.height);
+let buffer = imageData.data;
+
 async function handle_message(event) {
   try {
     // Convert Blob to ArrayBuffer
@@ -50,6 +56,15 @@ async function handle_message(event) {
       let controls = rawData["controls"];
       update_controls(controls);
       // console.log(rawData["controls"]);
+      let w = rawData["w"];
+      let h = rawData["h"];
+      let change_size = (canvas.width != w) || (canvas.height != h);
+      if (change_size) {
+        canvas.width = w;
+        canvas.height = h;
+        imageData = ctx.createImageData(canvas.width, canvas.height);
+        buffer = imageData.data;
+      }
 
       // performance.mark("finish decode msgpack");
       // performance.measure(
@@ -96,11 +111,6 @@ async function handle_message(event) {
   }
 }
 
-const canvas = document.getElementById("videoCanvas");
-const ctx = canvas.getContext("2d");
-
-const imageData = ctx.createImageData(canvas.width, canvas.height);
-const buffer = imageData.data;
 
 // const ws = new WebSocket("ws://localhost:3000/ws");
 const ws = new WebSocket("/ws");

@@ -3,7 +3,7 @@ use anyhow::Result;
 use tokio::sync::broadcast;
 use zwo_asi_rs::{
     asi::{self},
-    camera_controller::{CameraController, ClientPacket, ControlMessages},
+    camera_controller::{ControlValues, CameraController, ClientPacket, ControlMessages, ImagePacket, PixelOrder},
     Camera,
 };
 
@@ -63,7 +63,7 @@ async fn main() -> Result<()> {
         .init();
 
     // Broadcast channel for WebSocket connections
-    let (tx, _rx) = broadcast::channel(32);
+    let (tx, _) = broadcast::channel(32);
     let (tx_cmds, rx_cmds) = broadcast::channel(32);
 
     let tx_thread = tx.clone();
@@ -95,7 +95,7 @@ async fn main() -> Result<()> {
     // Define app routes
     let app = Router::new()
         // .route("/ws", get(handle_ws.with_state(tx.clone())))
-        .fallback_service(ServeDir::new("web").append_index_html_on_directories(true))
+        .fallback_service(ServeDir::new("frontend/dist").append_index_html_on_directories(true))
         .route(
             "/ws",
             any(ws_handler).with_state(WebSocketState {
@@ -116,7 +116,7 @@ async fn main() -> Result<()> {
         );
 
     // Start the server
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:80")
         .await
         .unwrap();
     tracing::debug!("listening on {}", listener.local_addr().unwrap());
@@ -154,30 +154,114 @@ async fn handle_socket(stream: axum::extract::ws::WebSocket, state: WebSocketSta
     let mut transmit_rx = state.rx.subscribe();
     // Spawn a task to send broadcasted messages to this client
     let tx_task = tokio::spawn(async move {
+
+        //let controls = ControlValues {
+        //    gain: 0,
+        //    exposure: 0.,
+        //    wb_b: 0,
+        //    wb_r: 0,
+        //};
+        //
+        //let packet = ClientPacket::Preview(ImagePacket {
+        //    w: 1920,
+        //    h: 1080,
+        //    pix: PixelOrder::BGR,
+        //    img: vec![100; 1920 * 1080 * 3],
+        //    controls: controls,
+        //});
+        //
+        //let mut buf = Vec::new();
+        //// rmp::encode::write_map_len(&mut buf, 1);
+        //rmp_serde::encode::write_named(&mut buf, &packet).unwrap();
+        //let bytes: axum::body::Bytes = buf.into();
+        //let num_bytes = bytes.len();
+        //let ws_message = axum::extract::ws::Message::Binary(bytes);
+        //loop {
+        //    let send_start = std::time::Instant::now();
+        //    if sender
+        //        .send(ws_message.clone())
+        //        .await
+        //        .is_err()
+        //    {
+        //        println!("Sending message failed");
+        //        // break;
+        //    }
+        //    let send_end = std::time::Instant::now();
+        //    println!("Sent messsage in {:?}", send_end - send_start);
+        //
+        //}
+        //return;
+
         // let mut underlying_bytes = BytesMut::new();
         // let slice: &mut [u8] = &mut underlying_bytes[..];
         // let mut msgpack_data = Rc::<Vec<u8>>::new(vec![]);
         // let mut msgpack_data = Rc::<Vec<u8>>::new(vec![]);
         // let mut serializer = rmp_serde::Serializer::new(msgpack_data)
         //     .with_bytes(rmp_serde::config::BytesMode::ForceAll);
-        while let Ok(msg) = transmit_rx.recv().await {
-            // {
-            //     msg.serialize(&mut serializer).unwrap();
-            // }
-            // let packet = serializer.get_ref();
-            // let buf: &mut Vec<u8> = msgpack_data.as_mut();
-            let mut buf = Vec::new();
-            // rmp::encode::write_map_len(&mut buf, 1);
-            rmp_serde::encode::write_named(&mut buf, &msg).unwrap();
+        loop {
+            match transmit_rx.recv().await {
+                Ok(msg) => {
+                    println!("Recived a msg to trasnmit");
+                    // {
+                    //     msg.serialize(&mut serializer).unwrap();
+                    // }
+                    // let packet = serializer.get_ref();
+                     //let buf: &mut Vec<u8> = msgpack_data.as_mut();
+                    //let start = std::time::Instant::now();
+                    let mut buf = Vec::new();
+                    // rmp::encode::write_map_len(&mut buf, 1);
+                    rmp_serde::encode::write_named(&mut buf, &msg).unwrap();
+                    //let middle = std::time::Instant::now();
+                    //println!("Encoded message in {:?}", middle - start);
+                    let bytes: axum::body::Bytes = buf.into();
+                    let num_bytes = bytes.len();
 
-            if sender
-                .send(axum::extract::ws::Message::Binary(buf.into()))
-                .await
-                .is_err()
-            {
-                break;
+                    let ws_message = axum::extract::ws::Message::Binary(bytes);
+                    //let end = std::time::Instant::now();
+                    //println!("Generated ws_message in {:?}, size = {}KB", end - middle, num_bytes / 1024);
+
+                    let send_start = std::time::Instant::now();
+                    if sender
+                        .send(ws_message)
+                        .await
+                        .is_err()
+                    {
+                        println!("Sending message failed");
+                        // break;
+                    }
+                    let send_end = std::time::Instant::now();
+                    println!("Sent messsage in {:?}", send_end - send_start);
+                },
+                Err(e) => {
+                    println!("Getting msg to transmit failed with err {:?}", e);
+                    break;
+                }
             }
         }
+        // while let Ok(msg) = transmit_rx.recv().await {
+
+        //     println!("Recived a msg to trasnmit");
+        //     // {
+        //     //     msg.serialize(&mut serializer).unwrap();
+        //     // }
+        //     // let packet = serializer.get_ref();
+        //     // let buf: &mut Vec<u8> = msgpack_data.as_mut();
+        //     let mut buf = Vec::new();
+        //     // rmp::encode::write_map_len(&mut buf, 1);
+        //     rmp_serde::encode::write_named(&mut buf, &msg).unwrap();
+        //     println!("Encoded message");
+
+        //     if sender
+        //         .send(axum::extract::ws::Message::Binary(buf.into()))
+        //         .await
+        //         .is_err()
+        //     {
+        //         println!("Sending message failed");
+        //         break;
+        //     }
+        //         println!("Sent messsage");
+        // }
+        println!("Got here????");
     });
 
     // Handle incoming messages
