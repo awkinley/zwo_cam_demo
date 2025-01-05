@@ -109,6 +109,7 @@ pub struct CaptureStatus {
 pub enum PixelOrder {
     BGR = 0,
     RGB = 1,
+    RAW8 = 2,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -341,7 +342,7 @@ impl<'a> CameraController<'a> {
             wb_r: self.ccd.get_control_value(asi::CONTROL_TYPE::WB_R)?.0,
         })
     }
-    fn make_preview(&self, img_buffer: &mut [u8]) -> Result<ClientPacket> {
+    fn make_preview(&self) -> Result<ClientPacket> {
         // let start = std::time::Instant::now();
         //self.ccd.take_exposure(img_buffer);
         // self.ccd.get_video_data(img_buffer, 500)?;
@@ -365,13 +366,13 @@ impl<'a> CameraController<'a> {
         Ok(ClientPacket::Preview(ImagePacket {
             w: self.width,
             h: self.height,
-            pix: PixelOrder::BGR,
+            pix: PixelOrder::RAW8,
             img: img_buffer.to_vec(),
             controls: self.get_controls()?,
         }))
     }
 
-    fn make_histogram(&self, img: &mut ImageBuffer<Rgb<u8>, Vec<u8>>) -> Result<ClientPacket> {
+    fn make_histogram(&self) -> Result<ClientPacket> {
         let start = std::time::Instant::now();
         while !self
             .frame_available
@@ -448,7 +449,7 @@ impl<'a> CameraController<'a> {
             self.width as i32,
             self.height as i32,
             bin as i32,
-            asi::IMG_TYPE::RGB24,
+            asi::IMG_TYPE::RAW8,
         )?;
 
         self.set_gain(200, false)?;
@@ -456,11 +457,11 @@ impl<'a> CameraController<'a> {
         self.set_white_balance_blue(87, false)?;
         self.set_white_balance_red(45, false)?;
         self.ccd
-            .set_control_value(asi::CONTROL_TYPE::BANDWIDTHOVERLOAD, 100, false)?;
+            .set_control_value(asi::CONTROL_TYPE::BANDWIDTHOVERLOAD, 50, false)?;
 
-        let buf_size = self.width * self.height * 3;
-        let mut img = RgbImage::new(self.width as u32, self.height as u32);
-        let mut img_buffer = vec![0; buf_size as usize];
+        //let buf_size = self.width * self.height * 3;
+        //let mut img = RgbImage::new(self.width as u32, self.height as u32);
+        //let mut img_buffer = vec![0; buf_size as usize];
 
         loop {
             use CamState::*;
@@ -471,10 +472,10 @@ impl<'a> CameraController<'a> {
                         sleep(std::time::Duration::from_millis(1));
                     } else {
                         if show_hist {
-                            self.tx.send(self.make_histogram(&mut img)?)?;
+                            self.tx.send(self.make_histogram()?)?;
                         } else {
                             let start = std::time::Instant::now();
-                            self.tx.send(self.make_preview(&mut img_buffer)?)?;
+                            self.tx.send(self.make_preview()?)?;
                             let stop = std::time::Instant::now();
                             println!("Make preview took {:?}", stop - start);
                         }

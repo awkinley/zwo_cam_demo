@@ -12,6 +12,15 @@ function swizzle_bgr(bgrData, buffer) {
   }
 }
 
+function swizzle_raw(rgbData, buffer) {
+  for (let i = 0, j = 0; i < rgbData.length; i += 1, j += 4) {
+    buffer[j] = rgbData[i]; // Red
+    buffer[j + 1] = rgbData[i]; // Green
+    buffer[j + 2] = rgbData[i]; // Blue
+    buffer[j + 3] = 255; // Alpha
+  }
+}
+
 function swizzle_rgb(rgbData, buffer) {
   for (let i = 0, j = 0; i < rgbData.length; i += 3, j += 4) {
     buffer[j] = rgbData[i]; // Red
@@ -75,7 +84,14 @@ async function handle_message(event) {
 
       const bgrData = rawData["img"];
       // console.log(bgrData); // Logs the decoded object
-      if (!bgrData || bgrData.length !== canvas.width * canvas.height * 3) {
+      let bytes_per_pix = 3;
+      const BGR = 0;
+      const RGB = 1;
+      const RAW8 = 2;
+      if (rawData["pix"] == RAW8) {
+        bytes_per_pix = 1;
+      }
+      if (!bgrData || bgrData.length !== canvas.width * canvas.height * bytes_per_pix) {
         console.error("Invalid image data received");
         return;
       }
@@ -83,13 +99,14 @@ async function handle_message(event) {
       // Rearrange BGR to RGBA
       // performance.mark("start swizzle");
       // console.log(rawData["pix"]);
-      const BGR = 0;
-      const RGB = 1;
       if (rawData["pix"] == BGR) {
         swizzle_bgr(bgrData, buffer);
       } else if (rawData["pix"] == RGB) {
         swizzle_rgb(bgrData, buffer);
+      } else if (rawData["pix"] == RAW8) {
+        swizzle_raw(bgrData, buffer);
       }
+
       // performance.mark("end swizzle");
       // performance.measure("swizzle-duration", "start swizzle", "end swizzle");
 
